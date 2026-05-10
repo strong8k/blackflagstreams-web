@@ -1,0 +1,227 @@
+/* Onboarding Page Styles */
+.onboarding-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #050508;
+  padding: 2rem;
+  background-image: 
+    radial-gradient(circle at 10% 10%, rgba(233, 0, 0, 0.05) 0%, transparent 40%),
+    radial-gradient(circle at 90% 90%, rgba(240, 192, 64, 0.05) 0%, transparent 40%);
+}
+
+.onboarding-container {
+  max-width: 900px;
+  width: 100%;
+  text-align: center;
+}
+
+.onboarding-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.onboarding-step h1 { 
+  font-family: var(--font-display);
+  font-size: 3rem;
+  margin: 1.5rem 0 0.5rem; 
+}
+
+.onboarding-step h2 {
+  font-family: var(--font-display);
+  font-size: 2.2rem;
+  margin: 1rem 0 0.5rem;
+}
+
+.onboarding-step p { color: var(--text-muted); margin-bottom: 2rem; }
+.onboarding-icon { font-size: 4rem; }
+
+/* Plan Step */
+.plans-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1.25rem;
+  width: 100%;
+  margin-top: 2rem;
+}
+
+.plan-card {
+  padding: 2rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: pointer;
+  transition: all 0.3s var(--ease-out);
+  border: 1px solid var(--border-subtle);
+}
+
+.plan-card:hover {
+  transform: translateY(-8px);
+  border-color: var(--accent);
+  background: rgba(196, 26, 26, 0.08);
+}
+
+.plan-card.featured {
+  border-color: var(--gold);
+  background: rgba(240, 192, 64, 0.05);
+}
+
+.plan-icon { font-size: 2.5rem; margin-bottom: 1rem; }
+.plan-card h3 { font-family: var(--font-display); margin-bottom: 0.5rem; }
+.plan-price { font-size: 1.5rem; font-weight: 800; color: var(--gold); margin-bottom: 1.5rem; }
+.plan-card ul { 
+  list-style: none; 
+  padding: 0; 
+  margin: 0 0 2rem; 
+  text-align: left; 
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  width: 100%;
+}
+.plan-card li { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; }
+.plan-card li::before { content: '⚓'; font-size: 0.6rem; opacity: 0.6; }
+
+/* Forms */
+.onboarding-form {
+  background: rgba(255, 255, 255, 0.03);
+  padding: 2.5rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  width: 100%;
+  max-width: 450px;
+}
+
+.onboarding-form input {
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--border-subtle);
+  padding: 0.85rem 1.25rem;
+  border-radius: var(--radius-md);
+  color: #fff;
+  width: 100%;
+}
+
+.verify-input {
+  font-size: 2rem;
+  text-align: center;
+  letter-spacing: 0.5em;
+  font-family: monospace;
+}
+
+.mock-payment {
+  padding: 2rem;
+  width: 100%;
+  max-width: 450px;
+  margin-bottom: 2rem;
+  border: 1px dashed var(--gold);
+}
+
+.price-tag {
+  font-size: 2rem;
+  font-weight: 800;
+  color: var(--gold);
+  margin-top: 1rem;
+}
+
+/* Profile */
+.avatar-preview {
+  width: 80px; height: 80px;
+  margin: 0 auto;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 2.5rem;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+  border: 2px solid rgba(255,255,255,0.2);
+}
+
+.avatar-grid, .color-grid { 
+  display: flex; 
+  flex-wrap: wrap; 
+  gap: 0.5rem; 
+  justify-content: center; 
+}
+
+.avatar-btn {
+  width: 42px; height: 42px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 1.25rem;
+  cursor: pointer;
+}
+.avatar-btn.active { border-color: var(--accent); background: rgba(196, 26, 26, 0.2); }
+
+.color-btn {
+  width: 32px; height: 32px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.color-btn.active { border-color: white; transform: scale(1.1); }
+
+/* Addons Step */
+.addons-step { max-width: 800px; }
+.addons-section { width: 100%; text-align: left; }
+.addons-section h4 { margin: 1.5rem 0 1rem; color: var(--gold); text-transform: uppercase; font-size: 0.8rem; letter-spacing: 0.1em; }
+
+.addon-onboarding-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.addon-onboarding-card {
+  padding: 1.25rem;
+  cursor: pointer;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  transition: all 0.2s;
+  position: relative;
+}
+.addon-onboarding-card:hover { border-color: var(--accent); background: rgba(255,255,255,0.02); }
+.addon-onboarding-card.active { border-color: var(--accent); background: rgba(196, 26, 26, 0.1); }
+
+.addon-check { position: absolute; top: 1rem; right: 1rem; color: var(--accent); font-weight: 800; }
+.addon-onboarding-card h3 { font-size: 0.95rem; margin-bottom: 0.25rem; }
+.addon-onboarding-card p { font-size: 0.75rem; color: var(--text-muted); line-height: 1.4; }
+
+.custom-addon-input {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 1rem;
+}
+
+.custom-addons-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 1.5rem;
+}
+
+.custom-addon-tag {
+  background: rgba(255,255,255,0.05);
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.custom-addon-tag button { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0 2px; }
+
+.limit-text { font-size: 0.75rem; color: var(--text-muted); }
+
+.onboarding-actions { display: flex; gap: 1rem; margin-top: 2rem; width: 100%; }
+.onboarding-actions button { flex: 1; }
+
+@media (max-width: 768px) {
+  .plans-row { grid-template-columns: 1fr; }
+  .onboarding-step h1 { font-size: 2rem; }
+}

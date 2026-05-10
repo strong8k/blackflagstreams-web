@@ -1,0 +1,97 @@
+.hero-banner {
+  position: relative;
+  width: 100%;
+  height: 70vh;
+  max-height: 700px;
+  min-height: 420px;
+  overflow: hidden;
+  cursor: pointer;
+}
+.hero-skeleton { background: var(--bg-surface); }
+
+.hero-bg-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+.hero-bg-img.loaded { opacity: 1; }
+
+.hero-gradient {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(to top, var(--bg-base) 0%, transparent 50%),
+    linear-gradient(to right, rgba(10,10,15,0.85) 0%, transparent 50%);
+}
+
+.hero-content {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 0 2rem 3rem;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  z-index: 2;
+}
+
+.hero-meta {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+.hero-badge {
+  background: var(--accent);
+  color: #fff;
+  padding: 2px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.hero-rating { color: var(--gold); font-weight: 700; }
+
+.hero-title {
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  margin-bottom: 0.75rem;
+  text-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  max-width: 700px;
+}
+
+.hero-overview {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  max-width: 550px;
+  margin-bottom: 1.5rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.hero-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.hero-wl-active { border-color: var(--accent); color: var(--accent); }
+
+@media (max-width: 768px) {
+  .hero-banner { height: 60vh; max-height: 500px; }
+  .hero-content { padding: 0 1rem 2rem; }
+  .hero-title { font-size: 1.5rem; }
+  .hero-overview { font-size: 0.8rem; max-width: 100%; }
+}
