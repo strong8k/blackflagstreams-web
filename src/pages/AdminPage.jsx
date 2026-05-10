@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useStore } from '../lib/store';
 import { requestAdminOtp, verifyAdminOtp } from '../lib/auth';
+import { VERSION } from '../lib/version';
 import './AdminPage.css';
 
 const LOG = (...a) => console.log('[BFS:Admin]', ...a);
@@ -130,7 +131,7 @@ export default function AdminPage() {
   return (
     <div className="admin-page page container">
       <header className="admin-header">
-        <h1 className="section-title">⚓ Ops Console</h1>
+        <h1 className="section-title">⚓ Ops Console <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 400 }}>{VERSION}</span></h1>
         <nav className="admin-nav">
           {['dashboard', 'users', 'addons', 'config', 'danger'].map(v => (
             <button

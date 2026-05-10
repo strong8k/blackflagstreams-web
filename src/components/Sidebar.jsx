@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { NavLink, Link } from 'react-router-dom';
 import { useStore } from '../lib/store';
 import LogoSvg from '../assets/bfs.svg';
+import { VERSION } from '../lib/version';
 
 const NAV_ITEMS = [
   { to: '/',          icon: '🏠', label: 'Home' },
@@ -79,6 +80,8 @@ export default function Sidebar() {
           <Link to="/beta">Beta</Link>
         </div>
         <div className="sidebar-copyright">
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>{VERSION}</span>
+          <br />
           © 2026 BlackFlagStreams by <a href="https://www.lowdefpirate.link" target="_blank" rel="noopener noreferrer">LowDefPirate</a>
         </div>
         <button
