@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useStore } from '../lib/store';
-import { getApiBaseUrl } from '../lib/auth';
+import { getWorkerProxyBase } from '../lib/auth';
 
 const TORBOX_REFERRAL = 'https://torbox.app/subscription?referral=ca6e2688-382c-46f0-a0f9-009481bbdafc';
 const TORBOX_API = 'https://api.torbox.app/v1/api/users/me';
@@ -63,9 +63,9 @@ async function testTorBoxKey(apiKey, corsProxy) {
     WARN('No CORS proxy configured — skipping proxy attempt');
   }
 
-  // 3. Try via BFS backend relay (server-to-server, no CORS issue)
-  const apiBase = getApiBaseUrl();
-  const relayUrl = `${apiBase}/api/proxy/torbox`;
+  // 3. Try via openprox Worker relay (server-to-server, no CORS issue)
+  const apiBase = getWorkerProxyBase();
+  const relayUrl = `${apiBase}/proxy/torbox`;
   LOG('Attempting backend relay via:', relayUrl);
   try {
     const res = await fetch(relayUrl, {

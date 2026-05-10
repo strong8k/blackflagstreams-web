@@ -16,10 +16,15 @@ export function getApiBaseUrl() {
   return API_BASE;
 }
 
-// The Worker itself acts as the CORS proxy — no VPS needed.
-// Worker fetches target URLs server-to-server and returns with CORS headers.
+// Dedicated openprox Worker — server-to-server fetches, full CORS headers, no VPS.
+const OPENPROX_BASE = 'https://openprox.michaelrobgrove.workers.dev';
+
 export function getWorkerProxyUrl() {
-  return `${getApiBaseUrl()}/api/proxy`;
+  return `${OPENPROX_BASE}/proxy`;
+}
+
+export function getWorkerProxyBase() {
+  return OPENPROX_BASE;
 }
 
 export function getToken() {
