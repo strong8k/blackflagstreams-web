@@ -37,10 +37,11 @@ async function testTorBoxKey(apiKey, corsProxy) {
     WARN('Direct fetch failed (likely CORS):', e.message, '— trying proxy...');
   }
 
-  // 2. Try via configured CORS proxy
+  // 2. Try via configured CORS proxy — always use ?url= format to match bfsprox standard
   if (corsProxy) {
-    const cleanProxy = corsProxy.endsWith('/') ? corsProxy : `${corsProxy}/`;
-    const proxyUrl = `${cleanProxy}${TORBOX_API}`;
+    const baseProxy = corsProxy.endsWith('/') ? corsProxy.slice(0, -1) : corsProxy;
+    const sep = baseProxy.includes('?') ? '&' : '?';
+    const proxyUrl = `${baseProxy}${sep}url=${encodeURIComponent(TORBOX_API)}`;
     LOG('Attempting proxy fetch via:', proxyUrl);
     try {
       const res = await fetch(proxyUrl, { headers });
@@ -63,7 +64,8 @@ async function testTorBoxKey(apiKey, corsProxy) {
   }
 
   // 3. Try via BFS backend relay (server-to-server, no CORS issue)
-  const relayUrl = `${getApiBaseUrl()}/api/proxy/torbox`;
+  const apiBase = getApiBaseUrl();
+  const relayUrl = `${apiBase}/api/proxy/torbox`;
   LOG('Attempting backend relay via:', relayUrl);
   try {
     const res = await fetch(relayUrl, {
@@ -77,18 +79,24 @@ async function testTorBoxKey(apiKey, corsProxy) {
       LOG('Relay fetch success. Plan:', data.data?.plan_name);
       return data;
     }
+    const body = await res.text().catch(() => '');
+    ERR('Relay fetch HTTP error:', res.status, body.slice(0, 200));
     if (res.status === 404) {
-      ERR('Backend relay endpoint /api/proxy/torbox not implemented yet');
-      throw new Error('All fetch methods failed. Configure a CORS proxy in Settings or ask admin to implement /api/proxy/torbox');
+      throw new Error(
+        'TorBox connection failed — CORS proxy is blocking the request AND backend relay (/api/proxy/torbox) is not yet implemented. ' +
+        'Fix: add bfsv2.pages.dev to the proxy CORS allowlist on bfsprox, OR implement the relay endpoint.'
+      );
     }
-    const body = await res.text();
-    ERR('Relay fetch error:', res.status, body.slice(0, 200));
     throw new Error(`Backend relay failed (${res.status})`);
   } catch (e) {
-    if (!e.message.includes('All fetch')) {
-      ERR('Relay fetch threw:', e.message);
-    }
-    throw e;
+    if (e.message.startsWith('TorBox connection') || e.message.startsWith('Backend relay')) throw e;
+    // Likely a CORS preflight failure on the relay itself — backend needs to allow this origin
+    ERR('Relay fetch network error (backend CORS?):', e.message);
+    ERR('Fix needed: add', window.location.origin, 'to allowed origins on', apiBase);
+    throw new Error(
+      `All fetch methods failed. The CORS proxy at bfsprox is blocking ${window.location.origin}. ` +
+      'Add this origin to the proxy allowlist, or implement /api/proxy/torbox on the backend.'
+    );
   }
 }
 

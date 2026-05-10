@@ -52,16 +52,27 @@ export function getBaseUrl(transportUrl) {
   return transportUrl.replace(/\/manifest\.json\/?$/, '');
 }
 
+const ADDON_LOG = (...a) => console.log('[BFS:Addons]', ...a);
+const ADDON_WARN = (...a) => console.warn('[BFS:Addons]', ...a);
+
 async function safeFetch(url, timeoutMs = 15000, proxyUrl = null) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  let targetUrl = url;
-  if (proxyUrl && !url.includes(proxyUrl)) {
-    const encoded = encodeURIComponent(url);
+  // Resolve relative URLs against the BFS backend base
+  let resolvedUrl = url;
+  if (url.startsWith('/')) {
+    const { getApiBaseUrl } = await import('./auth');
+    resolvedUrl = `${getApiBaseUrl()}${url}`;
+    ADDON_WARN('safeFetch: relative URL resolved to', resolvedUrl);
+  }
+
+  let targetUrl = resolvedUrl;
+  if (proxyUrl && !resolvedUrl.includes(proxyUrl)) {
+    // Always use ?url= query format — matches bfsprox and standard CORS proxies
     const sep = proxyUrl.includes('?') ? '&' : '?';
-    const param = proxyUrl.includes('url=') ? '' : 'url=';
-    targetUrl = `${proxyUrl}${sep}${param}${encoded}`;
+    targetUrl = `${proxyUrl}${sep}url=${encodeURIComponent(resolvedUrl)}`;
+    ADDON_LOG('safeFetch: via proxy →', targetUrl);
   }
 
   try {
