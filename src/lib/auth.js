@@ -11,11 +11,15 @@ const ERR = (...args) => console.error('[BFS:Auth]', ...args);
 export function getApiBaseUrl() {
   const override = localStorage.getItem('bfs_api_base');
   if (override) { LOG('Using override API base:', override); return override; }
-  // Auto-detect based on hostname — frontend can be on pages.dev or blackflagstreams.link,
-  // but the Worker backend is always on blackflagstream.pages.dev
   const host = typeof window !== 'undefined' ? window.location.hostname : '';
   LOG('Detected hostname:', host, '→ API base:', API_BASE);
   return API_BASE;
+}
+
+// The Worker itself acts as the CORS proxy — no VPS needed.
+// Worker fetches target URLs server-to-server and returns with CORS headers.
+export function getWorkerProxyUrl() {
+  return `${getApiBaseUrl()}/api/proxy`;
 }
 
 export function getToken() {

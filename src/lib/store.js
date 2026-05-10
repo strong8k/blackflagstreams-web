@@ -6,7 +6,7 @@ import { create } from 'zustand';
 import { nanoid } from 'nanoid';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { DEFAULT_ADDONS, RECOMMENDED_ADDONS, fetchManifest } from './addons';
-import { isLoggedIn, getStoredUser, getUserTier, getTierLimits, getToken, checkSession, pullSyncData, debouncedPush } from './auth';
+import { isLoggedIn, getStoredUser, getUserTier, getTierLimits, getToken, checkSession, pullSyncData, debouncedPush, getWorkerProxyUrl } from './auth';
 
 // ── IDB helpers ──
 const LOG = (...a) => console.log('[BFS:Store]', ...a);
@@ -112,9 +112,16 @@ export const useStore = create((set, get) => ({
     if (cfg.corsProxy && !localStorage.getItem('bfs_user_cors_proxy')) {
       localStorage.setItem('bfs_cors_proxy', cfg.corsProxy);
     }
+    const effectiveCorsProxy =
+      localStorage.getItem('bfs_user_cors_proxy') ||
+      cfg.corsProxy ||
+      localStorage.getItem('bfs_cors_proxy') ||
+      getWorkerProxyUrl();
+    LOG('setGlobalConfig: effectiveCorsProxy =', effectiveCorsProxy);
     set(s => ({
       config: cfg,
       auth: s.auth.loggedIn ? s.auth : { ...s.auth, assignedAddons: cfg.globalAddons || [] },
+      settings: { ...s.settings, effectiveCorsProxy },
     }));
     get().initAddons();
   },
@@ -124,7 +131,8 @@ export const useStore = create((set, get) => ({
     userTmdbKey: localStorage.getItem('bfs_user_tmdb_key') || '',
     userCorsProxy: localStorage.getItem('bfs_user_cors_proxy') || '',
     effectiveTmdbKey: localStorage.getItem('bfs_user_tmdb_key') || localStorage.getItem('bfs_tmdb_key') || '',
-    effectiveCorsProxy: localStorage.getItem('bfs_user_cors_proxy') || localStorage.getItem('bfs_cors_proxy') || '',
+    // Fall back to the Worker's own proxy endpoint — no VPS needed
+    effectiveCorsProxy: localStorage.getItem('bfs_user_cors_proxy') || localStorage.getItem('bfs_cors_proxy') || getWorkerProxyUrl(),
     viewMode: localStorage.getItem('bfs_view_mode') || 'poster',
     autoSync: localStorage.getItem('bfs_auto_sync') !== 'false',
   },
@@ -141,12 +149,12 @@ export const useStore = create((set, get) => ({
   },
   setCorsProxy: (u) => {
     if (u) { localStorage.setItem('bfs_user_cors_proxy', u); } else { localStorage.removeItem('bfs_user_cors_proxy'); }
-    set(s => ({ 
-      settings: { 
-        ...s.settings, 
+    set(s => ({
+      settings: {
+        ...s.settings,
         userCorsProxy: u,
-        effectiveCorsProxy: u || localStorage.getItem('bfs_cors_proxy') || '' 
-      } 
+        effectiveCorsProxy: u || localStorage.getItem('bfs_cors_proxy') || getWorkerProxyUrl(),
+      }
     }));
   },
   setViewMode: (mode) => {
