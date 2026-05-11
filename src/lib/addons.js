@@ -67,16 +67,9 @@ async function safeFetch(url, timeoutMs = 15000, proxyUrl = null) {
     ADDON_WARN('safeFetch: relative URL resolved to', resolvedUrl);
   }
 
-  let targetUrl = resolvedUrl;
-  if (proxyUrl && !resolvedUrl.includes(proxyUrl)) {
-    // Always use ?url= query format — matches bfsprox and standard CORS proxies
-    const sep = proxyUrl.includes('?') ? '&' : '?';
-    targetUrl = `${proxyUrl}${sep}url=${encodeURIComponent(resolvedUrl)}`;
-    ADDON_LOG('safeFetch: via proxy →', targetUrl);
-  }
-
+  // Try direct first — most Stremio addons send CORS headers
   try {
-    const res = await fetch(targetUrl, {
+    const res = await fetch(resolvedUrl, {
       signal: controller.signal,
       headers: { 'Accept': 'application/json' },
     });
@@ -85,6 +78,28 @@ async function safeFetch(url, timeoutMs = 15000, proxyUrl = null) {
     return res.json();
   } catch (err) {
     clearTimeout(timer);
+    // If direct fails, try via proxy
+    if (proxyUrl && !resolvedUrl.includes(proxyUrl)) {
+      const parsedProxy = new URL(proxyUrl);
+      parsedProxy.searchParams.set('url', resolvedUrl);
+      const targetUrl = parsedProxy.toString();
+      ADDON_LOG('safeFetch: direct failed, via proxy →', targetUrl);
+      const pController = new AbortController();
+      const pTimer = setTimeout(() => pController.abort(), timeoutMs);
+      try {
+        const pRes = await fetch(targetUrl, {
+          signal: pController.signal,
+          headers: { 'Accept': 'application/json' },
+        });
+        clearTimeout(pTimer);
+        if (!pRes.ok) throw new Error(`Proxy HTTP ${pRes.status}`);
+        return pRes.json();
+      } catch (pErr) {
+        clearTimeout(pTimer);
+        if (pErr.name === 'AbortError') throw new Error('Request timed out');
+        throw pErr;
+      }
+    }
     if (err.name === 'AbortError') throw new Error('Request timed out');
     throw err;
   }
@@ -130,11 +145,11 @@ export async function fetchCatalog(transportUrl, type, catalogId, extra = {}) {
 
 // ── Streams ──
 
-export async function fetchStreams(transportUrl, type, id) {
+export async function fetchStreams(transportUrl, type, id, proxyUrl = null) {
   const base = getBaseUrl(transportUrl);
   const url = `${base}/stream/${type}/${id}.json`;
   try {
-    const data = await safeFetch(url);
+    const data = await safeFetch(url, 15000, proxyUrl);
     return (data.streams || []).map(stream => ({
       ...stream,
       _addonUrl: transportUrl,
@@ -143,7 +158,7 @@ export async function fetchStreams(transportUrl, type, id) {
   } catch { return []; }
 }
 
-export async function fetchAllStreams(addons, type, id, tmdbId, onProgress) {
+export async function fetchAllStreams(addons, type, id, tmdbId, onProgress, proxyUrl = null) {
   const streamPromises = addons
     .filter(addon => {
       if (!addon.manifest) return false;
@@ -156,7 +171,7 @@ export async function fetchAllStreams(addons, type, id, tmdbId, onProgress) {
         const subPromises = [];
 
         if (id && (prefixes.length === 0 || prefixes.some(p => id.startsWith(p)))) {
-          subPromises.push(fetchStreams(addon.manifest.transportUrl, type, id));
+          subPromises.push(fetchStreams(addon.manifest.transportUrl, type, id, proxyUrl));
         }
         if (tmdbId && prefixes.some(p => p === 'tmdb_' || p === 'tmdb:')) {
           let tmdbStreamId = `tmdb_${tmdbId}`;
@@ -164,7 +179,7 @@ export async function fetchAllStreams(addons, type, id, tmdbId, onProgress) {
             const parts = id.split(':');
             if (parts.length >= 3) tmdbStreamId = `tmdb_${tmdbId}:${parts[1]}:${parts[2]}`;
           }
-          subPromises.push(fetchStreams(addon.manifest.transportUrl, type, tmdbStreamId));
+          subPromises.push(fetchStreams(addon.manifest.transportUrl, type, tmdbStreamId, proxyUrl));
         }
 
         const subResults = await Promise.all(subPromises);
@@ -185,7 +200,7 @@ export async function fetchAllStreams(addons, type, id, tmdbId, onProgress) {
     .filter(r => r.status === 'fulfilled')
     .flatMap(r => r.value)
     .filter(stream => {
-      const key = stream.url || stream.infoHash || stream.ytId || stream.externalUrl || Math.random();
+      const key = stream.url || stream.infoHash || stream.ytId || stream.externalUrl || `${stream._addonId || ''}:${stream.title || stream.name || ''}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -247,6 +262,7 @@ export function buildPlayableUrl(stream, proxyUrl) {
     }
     return finalUrl;
   }
+  if (stream.externalUrl) return stream.externalUrl;
   return stream.url;
 }
 

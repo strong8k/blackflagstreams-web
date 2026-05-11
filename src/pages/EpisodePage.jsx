@@ -5,7 +5,8 @@ import { getTVDetails, getSeasonDetails, getExternalIds, img } from '../lib/tmdb
 import { fetchAllStreams, classifyStream, getStreamTitle, buildPlayableUrl } from '../lib/addons';
 import { searchIPTVVOD } from '../lib/iptv';
 import { useStore } from '../lib/store';
-import './DetailPage.css'; // Reuse detail page styles
+import LogoSvg from '../assets/bfs.svg';
+import './DetailPage.css';
 
 const QUALITY_BADGES = {
   '4K':    { label: '4K',    color: '#d4a843', bg: 'rgba(212,168,67,0.15)' },
@@ -16,6 +17,8 @@ const QUALITY_BADGES = {
   'HDR':   { label: 'HDR',   color: '#e87c2e', bg: 'rgba(232,124,46,0.15)' },
   'CAM':   { label: 'CAM',   color: '#e84438', bg: 'rgba(232,68,56,0.12)' },
 };
+
+const STREAM_FILTERS = ['All', '4K', '1080p', '720p', '480p', '360p', 'HDR'];
 
 function parseQuality(stream) {
   const text = `${stream.title || ''} ${stream.name || ''}`;
@@ -79,9 +82,19 @@ export default function EpisodePage() {
     if (!loading && (imdbId || id) && addons.length > 0) loadStreams();
   }, [loading, imdbId, addons]);
 
-  const loadStreams = async () => {
+  const loadStreams = async (force = false) => {
     if (!activeProfile) return;
     setStreamsLoading(true); setStreams([]);
+
+    if (!force) {
+      const { getCachedStreams: gcs } = await import('../lib/tmdb');
+      const cached = await gcs('tv_episode', `${id}:${season}:${ep}`);
+      if (cached && cached.length > 0) {
+        setStreams(cached);
+        setStreamsLoading(false);
+        return;
+      }
+    }
     const enabledAddons = addons.filter(a => a.enabled && a.manifest);
     const stremioId = imdbId ? `${imdbId}:${season}:${ep}` : `tmdb:${id}:${season}:${ep}`;
 
@@ -90,16 +103,19 @@ export default function EpisodePage() {
         const combined = [...prev, ...newStreams];
         const seen = new Set();
         return combined.filter(s => {
-          const key = s.url || s.infoHash || s.ytId || s.externalUrl || Math.random();
+          const key = s.url || s.infoHash || s.ytId || s.externalUrl || `${s._addonId || ''}:${s.title || s.name || ''}`;
           if (seen.has(key)) return false;
           seen.add(key);
           return true;
         });
       });
-    });
+    }, settings.effectiveCorsProxy);
 
     setStreams(results);
     setStreamsLoading(false);
+    // Cache for 2 hours
+    const { setCachedStreams } = await import('../lib/tmdb');
+    setCachedStreams('tv_episode', `${id}:${season}:${ep}`, results);
   };
 
   const handleStreamPlay = (stream) => {
@@ -124,7 +140,7 @@ export default function EpisodePage() {
       navigate(`/player?${p.toString()}`);
       return;
     }
-    const url = buildPlayableUrl(stream, settings.corsProxy);
+    const url = buildPlayableUrl(stream, settings.effectiveCorsProxy);
     if (url) {
       const p = new URLSearchParams({ ...baseParams, url });
       navigate(`/player?${p.toString()}`);
@@ -138,7 +154,17 @@ export default function EpisodePage() {
     return list.filter(s => parseQuality(s).includes(activeFilter));
   }, [streams, activeFilter, isPaid]);
 
-  if (loading) return <div className="page"><div className="spinner" /></div>;
+  if (loading) return (
+    <div className="page detail-page">
+      <div className="detail-backdrop-skeleton" />
+      <div className="detail-content container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
+        <div style={{ textAlign: 'center' }}>
+          <img src={LogoSvg} alt="Loading..." className="loading-logo-pulse" style={{ width: '120px', height: 'auto', filter: 'drop-shadow(0 0 24px var(--primary-glow))' }} />
+          <p style={{ color: 'var(--text-muted)', marginTop: '1rem' }}>Loading...</p>
+        </div>
+      </div>
+    </div>
+  );
   if (!episode) return <div className="page"><div className="empty-state"><h3>Episode not found</h3></div></div>;
 
   return (
@@ -166,14 +192,24 @@ export default function EpisodePage() {
         </div>
 
         <section className="detail-streams-section container">
-        <div className="streams-header">
-          <h2 className="section-title">📡 Episode Streams</h2>
-          <div className="streams-filters">
-            <button className={`filter-btn ${activeFilter === 'All' ? 'active' : ''}`} onClick={() => setActiveFilter('All')}>All</button>
-            <button className={`filter-btn ${activeFilter === '4K' ? 'active' : ''}`} onClick={() => setActiveFilter('4K')}>4K</button>
-            <button className={`filter-btn ${activeFilter === '1080p' ? 'active' : ''}`} onClick={() => setActiveFilter('1080p')}>1080p</button>
-            <button className="btn btn-secondary btn-sm" onClick={loadStreams} disabled={streamsLoading}>
-              {streamsLoading ? 'Searching...' : '🔄 Refresh'}
+        <div className="detail-streams-header">
+          <h2 className="section-title">
+            {streamsLoading && streams.length === 0 ? (
+              <span className="stream-searching">⚡ Searching for streams...</span>
+            ) : '🎯 Streams'}
+          </h2>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            {streams.length > 0 && (
+              <div className="stream-filters">
+                {STREAM_FILTERS.map(f => (
+                  <button key={f} className={`stream-filter-btn${activeFilter === f ? ' active' : ''}`} onClick={() => setActiveFilter(f)}>
+                    {f}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button className="btn btn-secondary btn-sm" onClick={() => loadStreams(true)} disabled={streamsLoading}>
+              {streamsLoading ? 'Searching...' : '↻ Refresh'}
             </button>
           </div>
         </div>

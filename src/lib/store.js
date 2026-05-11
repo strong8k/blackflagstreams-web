@@ -7,6 +7,11 @@ import { nanoid } from 'nanoid';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { DEFAULT_ADDONS, RECOMMENDED_ADDONS, fetchManifest } from './addons';
 import { isLoggedIn, getStoredUser, getUserTier, getTierLimits, getToken, checkSession, pullSyncData, debouncedPush, getWorkerProxyUrl } from './auth';
+import { getTraktStatus, disconnectTrakt, syncTraktHistory as syncTraktHistoryApi, enqueueTraktPush } from './trakt';
+import {
+  getStremioStatus, getTorBoxStatus, getRDStatus, getADStatus, getRPDBStatus,
+} from './services';
+import { clearStreamCache } from './tmdb';
 
 // ── IDB helpers ──
 const LOG = (...a) => console.log('[BFS:Store]', ...a);
@@ -87,6 +92,10 @@ export const useStore = create((set, get) => ({
           set({ profiles: merged });
         }
       }
+      // assignedAddons = backend-forced addons (already tier-filtered server-side)
+      const assignedAddons = (result.assignedAddons || []).map(a => ({
+        ...a, flags: { ...a.flags, protected: true, forced: true },
+      }));
       set(s => ({
         auth: {
           ...s.auth,
@@ -94,9 +103,12 @@ export const useStore = create((set, get) => ({
           user: result.user,
           tier: result.user.tier,
           tierLimits: result.tierLimits || getTierLimits(result.user.tier),
-          assignedAddons: result.assignedAddons || [],
+          assignedAddons,
           loading: false,
         },
+        // Session may return addon catalogs for the addons page
+        recommendedAddons: result.recommendedAddons || s.recommendedAddons,
+        ultraAddons: result.ultraAddons || s.ultraAddons,
       }));
     } else {
       set(s => ({ auth: { ...s.auth, loggedIn: false, user: null, tier: 'free', tierLimits: getTierLimits('free'), loading: false } }));
@@ -105,25 +117,42 @@ export const useStore = create((set, get) => ({
 
   // ── Config ──
   config: {},
+  // Addon catalogs from backend (separate from user's active addon list)
+  recommendedAddons: [],
+  ultraAddons: [],        // shown only to ultra users (upgrade-gated for others)
+
   setGlobalConfig: (cfg) => {
     if (cfg.tmdbKey && !localStorage.getItem('bfs_user_tmdb_key')) {
       localStorage.setItem('bfs_tmdb_key', cfg.tmdbKey);
     }
-    if (cfg.corsProxy && !localStorage.getItem('bfs_user_cors_proxy')) {
-      localStorage.setItem('bfs_cors_proxy', cfg.corsProxy);
-    }
+    // openprox IS our proxy — never store or use the legacy server corsProxy field.
+    // Remove any old bfsprox URL that may be cached from previous deploys.
+    localStorage.removeItem('bfs_cors_proxy');
     const effectiveCorsProxy =
       localStorage.getItem('bfs_user_cors_proxy') ||
-      cfg.corsProxy ||
-      localStorage.getItem('bfs_cors_proxy') ||
       getWorkerProxyUrl();
-    LOG('setGlobalConfig: effectiveCorsProxy =', effectiveCorsProxy);
+    const effectiveTmdbKey =
+      localStorage.getItem('bfs_user_tmdb_key') ||
+      cfg.tmdbKey ||
+      localStorage.getItem('bfs_tmdb_key') ||
+      '';
+    LOG('setGlobalConfig: effectiveCorsProxy =', effectiveCorsProxy, '| effectiveTmdbKey set:', !!effectiveTmdbKey);
+
+    // globalAddons from config = forced for all users (target:'all')
+    // recommendedAddons = optional suggestions for all
+    // ultraAddons = suggestions only for ultra users
+    const globalForced = (cfg.globalAddons || []).map(a => ({
+      ...a, flags: { ...a.flags, protected: true, forced: true },
+    }));
+
     set(s => ({
       config: cfg,
-      auth: s.auth.loggedIn ? s.auth : { ...s.auth, assignedAddons: cfg.globalAddons || [] },
-      settings: { ...s.settings, effectiveCorsProxy },
+      recommendedAddons: cfg.recommendedAddons || s.recommendedAddons,
+      ultraAddons: cfg.ultraAddons || s.ultraAddons,
+      auth: s.auth.loggedIn ? s.auth : { ...s.auth, assignedAddons: globalForced },
+      settings: { ...s.settings, effectiveCorsProxy, effectiveTmdbKey },
     }));
-    get().initAddons();
+    // initAddons already called from App on mount; proxy never changes here
   },
 
   // ── Settings ──
@@ -131,10 +160,62 @@ export const useStore = create((set, get) => ({
     userTmdbKey: localStorage.getItem('bfs_user_tmdb_key') || '',
     userCorsProxy: localStorage.getItem('bfs_user_cors_proxy') || '',
     effectiveTmdbKey: localStorage.getItem('bfs_user_tmdb_key') || localStorage.getItem('bfs_tmdb_key') || '',
-    // Fall back to the Worker's own proxy endpoint — no VPS needed
-    effectiveCorsProxy: localStorage.getItem('bfs_user_cors_proxy') || localStorage.getItem('bfs_cors_proxy') || getWorkerProxyUrl(),
+    effectiveCorsProxy: localStorage.getItem('bfs_user_cors_proxy') || getWorkerProxyUrl(),
     viewMode: localStorage.getItem('bfs_view_mode') || 'poster',
     autoSync: localStorage.getItem('bfs_auto_sync') !== 'false',
+    traktConnected: false,
+    traktUsername: null,
+    traktLastSync: null,
+    traktAutoSync: localStorage.getItem('bfs_trakt_auto_sync') !== 'false',
+  },
+
+  // ── Services (canonical connected-service state) ──
+  services: {
+    trakt:     { connected: false, username: null, lastSync: null, autoSync: localStorage.getItem('bfs_trakt_auto_sync') !== 'false' },
+    stremio:   { connected: false, username: null, lastImport: null },
+    torbox:    { connected: false, email: null, plan: null, expiresAt: null },
+    realdebrid:{ connected: false, username: null, premium: false, expiresAt: null },
+    alldebrid: { connected: false, username: null, premium: false, expiresAt: null },
+    rpdb:      { connected: false, tier: null },
+  },
+
+  setServiceStatus: (key, data) => set(s => ({
+    services: { ...s.services, [key]: { ...s.services[key], ...data } }
+  })),
+
+  connectService: (key, info) => set(s => ({
+    services: { ...s.services, [key]: { connected: true, ...info } }
+  })),
+
+  disconnectService: (key) => set(s => ({
+    services: { ...s.services, [key]: { connected: false } }
+  })),
+
+  initServices: async () => {
+    if (!isLoggedIn()) return;
+    const { getTraktStatus } = await import('./trakt');
+    const svcFns = [
+      ['trakt',   () => getTraktStatus()],
+      ['stremio', () => getStremioStatus()],
+      ['torbox',  () => getTorBoxStatus()],
+      ['realdebrid', () => getRDStatus()],
+      ['alldebrid',  () => getADStatus()],
+      ['rpdb',    () => getRPDBStatus()],
+    ];
+    const results = await Promise.allSettled(
+      svcFns.map(async ([key, fn]) => {
+        try {
+          const s = await fn();
+          if (s?.connected) get().connectService(key, s);
+        } catch (e) {
+          ERR(`initServices ${key}:`, e.message);
+        }
+      })
+    );
+    const failed = results.filter(r => r.status === 'rejected');
+    if (failed.length > 0) {
+      WARN(`initServices: ${failed.length}/${svcFns.length} services failed`);
+    }
   },
 
   setTmdbKey: (k) => {
@@ -153,13 +234,35 @@ export const useStore = create((set, get) => ({
       settings: {
         ...s.settings,
         userCorsProxy: u,
-        effectiveCorsProxy: u || localStorage.getItem('bfs_cors_proxy') || getWorkerProxyUrl(),
+        effectiveCorsProxy: u || getWorkerProxyUrl(),
       }
     }));
   },
   setViewMode: (mode) => {
     localStorage.setItem('bfs_view_mode', mode);
     set(s => ({ settings: { ...s.settings, viewMode: mode } }));
+  },
+
+  setTraktStatus: (connected, username, lastSync) => {
+    const data = { connected, username: username || null, lastSync: lastSync || null };
+    set(s => ({
+      settings: {
+        ...s.settings,
+        traktConnected: data.connected,
+        traktUsername: data.username,
+        traktLastSync: data.lastSync,
+      },
+      services: { ...s.services, trakt: { ...s.services.trakt, ...data } }
+    }));
+  },
+
+  toggleTraktAutoSync: () => {
+    const next = !get().services.trakt.autoSync;
+    localStorage.setItem('bfs_trakt_auto_sync', next ? 'true' : 'false');
+    set(s => ({
+      settings: { ...s.settings, traktAutoSync: next },
+      services: { ...s.services, trakt: { ...s.services.trakt, autoSync: next } }
+    }));
   },
 
   // ── Profiles ──
@@ -212,6 +315,21 @@ export const useStore = create((set, get) => ({
     const proxy = get().settings.effectiveCorsProxy;
     LOG('initAddons: starting, proxy:', proxy || '(none)');
 
+    // Bump this to invalidate all clients' IDB addon caches on next deploy
+    const ADDON_SCHEMA_VER = 4;
+    const slim = (arr) => arr.map(a => ({ transportUrl: a.transportUrl, enabled: a.enabled, category: a.category, flags: a.flags }));
+
+    const resolveManifests = (configs) => Promise.all(configs.map(async cfg => {
+      try {
+        const manifest = await fetchManifest(cfg.transportUrl, proxy);
+        LOG('initAddons: manifest ok:', manifest.name);
+        return { ...cfg, manifest, error: null };
+      } catch (e) {
+        WARN('initAddons: manifest failed for', cfg.transportUrl, ':', e.message);
+        return { ...cfg, manifest: null, error: e.message };
+      }
+    }));
+
     if (isLoggedIn()) {
       try {
         const data = await pullSyncData();
@@ -223,54 +341,54 @@ export const useStore = create((set, get) => ({
               configs.push({ transportUrl: def.transportUrl, enabled: true, category: def.category, flags: def.flags });
             }
           }
-          const resolved = await Promise.all(configs.map(async cfg => {
-            try {
-              const manifest = await fetchManifest(cfg.transportUrl, proxy);
-              LOG('initAddons: manifest ok:', manifest.name);
-              return { ...cfg, manifest, error: null };
-            } catch (e) {
-              WARN('initAddons: manifest failed for', cfg.transportUrl, ':', e.message);
-              return { ...cfg, manifest: null, error: e.message };
-            }
-          }));
+          const resolved = await resolveManifests(configs);
           set({ addons: resolved, addonsLoaded: true });
-          await idbSave('bfs_addons', configs.map(a => ({ transportUrl: a.transportUrl, enabled: a.enabled, category: a.category, flags: a.flags })));
+          await idbSave('bfs_addons', slim(configs));
+          await idbSave('bfs_addons_ver', ADDON_SCHEMA_VER);
           return;
         }
       } catch (e) { WARN('initAddons: sync pull failed:', e.message); }
     }
 
-    let configs = await idbLoad('bfs_addons', null);
-    if (!configs) {
-      LOG('initAddons: no cached addons, using defaults');
-      configs = DEFAULT_ADDONS.map(a => ({ transportUrl: a.transportUrl, enabled: true, category: a.category, flags: a.flags }));
+    // Check IDB schema version — wipe stale data on version bump
+    const storedVer = await idbLoad('bfs_addons_ver', 0);
+    let configs = null;
+    if (storedVer >= ADDON_SCHEMA_VER) {
+      configs = await idbLoad('bfs_addons', null);
+      if (configs) LOG('initAddons: loaded', configs.length, 'addons from IDB (v', storedVer, ')');
     } else {
-      LOG('initAddons: loaded', configs.length, 'addons from IDB');
+      LOG('initAddons: schema v', storedVer, '→ v', ADDON_SCHEMA_VER, ', wiping stale addon cache');
+      await idbSave('bfs_addons', null);
     }
+
+    if (!configs) {
+      configs = DEFAULT_ADDONS.map(a => ({ transportUrl: a.transportUrl, enabled: true, category: a.category, flags: a.flags }));
+      LOG('initAddons: starting fresh with', configs.length, 'default addons');
+    }
+
+    // Strip any stale relative-URL or non-http addon entries from old site data
+    configs = configs.filter(c => c.transportUrl && (c.transportUrl.startsWith('http://') || c.transportUrl.startsWith('https://')));
+
     for (const def of DEFAULT_ADDONS) {
       if (!configs.some(c => c.transportUrl === def.transportUrl)) {
         configs.push({ transportUrl: def.transportUrl, enabled: true, category: def.category, flags: def.flags });
       }
     }
 
+    // Merge server-assigned (forced) addons — always protected, always present
     const assigned = get().auth?.assignedAddons || [];
     for (const a of assigned) {
-      if (!configs.some(c => c.transportUrl === a.transportUrl)) configs.push(a);
+      const forcedEntry = { ...a, flags: { ...a.flags, protected: true, forced: true } };
+      const idx = configs.findIndex(c => c.transportUrl === a.transportUrl);
+      if (idx >= 0) configs[idx] = { ...configs[idx], ...forcedEntry };
+      else configs.push(forcedEntry);
     }
 
     try {
-      const addons = await Promise.all(configs.map(async cfg => {
-        try {
-          const manifest = await fetchManifest(cfg.transportUrl, proxy);
-          LOG('initAddons: manifest ok:', manifest.name);
-          return { ...cfg, manifest, error: null };
-        } catch (e) {
-          WARN('initAddons: manifest failed for', cfg.transportUrl, ':', e.message);
-          return { ...cfg, manifest: null, error: e.message };
-        }
-      }));
+      const addons = await resolveManifests(configs);
       set({ addons, addonsLoaded: true });
-      await idbSave('bfs_addons', configs.map(a => ({ transportUrl: a.transportUrl, enabled: a.enabled, category: a.category, flags: a.flags })));
+      await idbSave('bfs_addons', slim(configs));
+      await idbSave('bfs_addons_ver', ADDON_SCHEMA_VER);
     } catch (e) {
       ERR('initAddons: critical failure:', e.message);
       set({ addons: configs.map(c => ({ ...c, manifest: null })), addonsLoaded: true });
@@ -290,6 +408,7 @@ export const useStore = create((set, get) => ({
     updated.splice(insertIdx, 0, newAddon);
     set({ addons: updated });
     await idbSave('bfs_addons', updated.map(a => ({ transportUrl: a.transportUrl, enabled: a.enabled, category: a.category, flags: a.flags })));
+    clearStreamCache();
     get().triggerSync();
     return manifest;
   },
@@ -298,6 +417,7 @@ export const useStore = create((set, get) => ({
     const updated = get().addons.filter(a => a.transportUrl !== url);
     set({ addons: updated });
     await idbSave('bfs_addons', updated.map(a => ({ transportUrl: a.transportUrl, enabled: a.enabled, category: a.category, flags: a.flags })));
+    clearStreamCache();
     get().triggerSync();
   },
 
@@ -309,6 +429,7 @@ export const useStore = create((set, get) => ({
     const updated = get().addons.map(a => a.transportUrl === url && !a.flags?.protected ? { ...a, enabled: !a.enabled } : a);
     set({ addons: updated });
     await idbSave('bfs_addons', updated.map(a => ({ transportUrl: a.transportUrl, enabled: a.enabled, category: a.category, flags: a.flags })));
+    clearStreamCache();
     get().triggerSync();
   },
 
@@ -354,8 +475,97 @@ export const useStore = create((set, get) => ({
     }
     const keys = idbKeys(activeProfile);
     set({ continueWatching: updated }); await idbSave(keys.continueWatching, updated); get().triggerSync();
+    const { services } = get();
+    if (services.trakt.connected && services.trakt.autoSync) {
+      enqueueTraktPush(item);
+    }
   },
   getProgress: (id, type) => get().continueWatching.find(c => c.id === id && c.type === type) || null,
+
+  mergeTraktHistory: async (traktItems) => {
+    if (!traktItems || traktItems.length === 0) return 0;
+    const { activeProfile } = get();
+    const cw = [...get().continueWatching];
+    let added = 0;
+    for (const item of traktItems) {
+      const idx = cw.findIndex(c => c.id === item.id && c.type === item.type);
+      if (idx >= 0) {
+        if (!cw[idx].timestamp || (item.timestamp && item.timestamp > cw[idx].timestamp)) {
+          cw[idx] = { ...cw[idx], ...item };
+        }
+      } else {
+        cw.unshift(item);
+        added++;
+      }
+    }
+    const keys = idbKeys(activeProfile);
+    set({ continueWatching: cw });
+    await idbSave(keys.continueWatching, cw);
+    get().triggerSync();
+    return added;
+  },
+
+  syncTraktNow: async () => {
+    const { addToast, mergeTraktHistory, services } = get();
+    if (!services.trakt.connected) {
+      addToast('Trakt not connected', 'warning');
+      return;
+    }
+    addToast('Syncing Trakt history...', 'info');
+    try {
+      const result = await syncTraktHistoryApi();
+      if (result?.items?.length > 0) {
+        const added = await mergeTraktHistory(result.items);
+        addToast(`Synced ${added} new items from Trakt`, 'success');
+      } else {
+        addToast('Trakt sync complete — no new items', 'info');
+      }
+      const now = Date.now();
+      set(s => ({
+        settings: { ...s.settings, traktLastSync: now },
+        services: { ...s.services, trakt: { ...s.services.trakt, lastSync: now } }
+      }));
+    } catch (e) {
+      addToast(`Trakt sync failed: ${e.message}`, 'error');
+    }
+  },
+
+  initTraktStatus: async () => {
+    if (!isLoggedIn()) return;
+    try {
+      const status = await getTraktStatus();
+      set(s => ({
+        settings: {
+          ...s.settings,
+          traktConnected: status.connected || false,
+          traktUsername: status.username || null,
+          traktLastSync: status.lastSync || null,
+        },
+        services: {
+          ...s.services,
+          trakt: {
+            ...s.services.trakt,
+            connected: status.connected || false,
+            username: status.username || null,
+            lastSync: status.lastSync || null,
+          }
+        }
+      }));
+    } catch { /* silently fail */ }
+  },
+
+  disconnectTraktAccount: async () => {
+    try { await disconnectTrakt(); } catch { /* proceed with local cleanup */ }
+    set(s => ({
+      settings: {
+        ...s.settings,
+        traktConnected: false,
+        traktUsername: null,
+        traktLastSync: null,
+      },
+      services: { ...s.services, trakt: { connected: false } }
+    }));
+  },
 
   // ── Sync ──
   triggerSync: async () => {
