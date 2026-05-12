@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { getMovieDetails, getTVDetails, getExternalIds, img } from '../lib/tmdb';
+import { getMovieDetails, getTVDetails, getExternalIds, img, getCachedStreams, setCachedStreams } from '../lib/tmdb';
 import { fetchAllStreams, classifyStream, getStreamTitle, buildPlayableUrl } from '../lib/addons';
 import { searchIPTVVOD } from '../lib/iptv';
 import { useStore } from '../lib/store';
 import ContentRow from '../components/ContentRow';
+import LogoSvg from '../assets/bfs.svg';
 import './DetailPage.css';
 
 // ── Quality parsing ──
@@ -19,6 +20,8 @@ const QUALITY_BADGES = {
   'HDR':   { label: 'HDR',   color: '#e87c2e', bg: 'rgba(232,124,46,0.15)' },
   'CAM':   { label: 'CAM',   color: '#e84438', bg: 'rgba(232,68,56,0.12)' },
 };
+
+const STREAM_FILTERS = ['All', '4K', '1080p', '720p', '480p', '360p', 'HDR'];
 
 function parseQuality(stream) {
   const text = `${stream.title || ''} ${stream.name || ''}`;
@@ -48,7 +51,20 @@ function parseFileSize(stream) {
   return /^g/i.test(m[2]) ? v * 1024 : v;
 }
 
-const STREAM_FILTERS = ['All', '4K', '1080p', '720p'];
+function isTorBox(stream) {
+  const url = (stream.url || '').toLowerCase();
+  const name = (stream._addonName || '').toLowerCase();
+  const addonUrl = (stream._addonUrl || '').toLowerCase();
+  return url.includes('torbox') || name.includes('torbox') || addonUrl.includes('torbox');
+}
+
+function streamSortKey(stream, enabledAddons) {
+  const ai = enabledAddons.findIndex(ad => ad.manifest?.id === stream._addonId);
+  const idx = ai === -1 ? 999 : ai;
+  const tb = isTorBox(stream) ? -1 : 0; // TorBox first
+  const q = qualityRank(stream);
+  return `${tb}:${idx}:${q}`;
+}
 
 export default function DetailPage() {
   const { type, id } = useParams();
@@ -95,7 +111,7 @@ export default function DetailPage() {
         // Search IPTV VOD in parallel
         const title = data.title || data.name;
         const year = (data.release_date || data.first_air_date || '').substring(0, 4);
-        searchIPTVVOD(iptvProviders, title, year, type, settings.corsProxy)
+        searchIPTVVOD(iptvProviders, title, year, type, settings.effectiveCorsProxy)
           .then(result => { if (!cancelled && result) setIptvStream(result.stream); })
           .catch(() => {});
       } catch (e) { if (!cancelled) { setError(e.message); setLoading(false); } }
@@ -103,15 +119,25 @@ export default function DetailPage() {
     return () => { cancelled = true; };
   }, [type, id]);
 
-  // Auto-load streams for movies
+  // Auto-load streams for movies — wait until at least one addon has its manifest loaded
   useEffect(() => {
-    if (type === 'movie' && (imdbId || id) && addons.length > 0 && !loading) loadStreams();
+    if (type === 'movie' && (imdbId || id) && addons.some(a => a.enabled && a.manifest) && !loading) loadStreams();
   }, [imdbId, addons, loading]);
 
-  const loadStreams = async () => {
-    if (!activeProfile) { navigate('/onboarding'); return; }
+  const loadStreams = async (force = false) => {
     if (!imdbId && !id) { addToast('No ID found', 'warning'); return; }
     setStreamsLoading(true); setStreams([]);
+
+    // Check cache first (skip if force refresh)
+    if (!force) {
+      const cached = await getCachedStreams(type, imdbId || id);
+      if (cached && cached.length > 0) {
+        setStreams(cached);
+        setStreamsLoading(false);
+        return;
+      }
+    }
+
     const enabledAddons = addons.filter(a => a.enabled && a.manifest);
 
     const results = await fetchAllStreams(enabledAddons, type === 'tv' ? 'series' : 'movie', imdbId || id, id,
@@ -127,10 +153,14 @@ export default function DetailPage() {
             return true;
           });
         });
-      }
+      },
+      settings.effectiveCorsProxy
     );
 
     const sorted = [...results].sort((a, b) => {
+      const aTB = isTorBox(a) ? -1 : 0;
+      const bTB = isTorBox(b) ? -1 : 0;
+      if (aTB !== bTB) return aTB - bTB;
       const ai = enabledAddons.findIndex(ad => ad.manifest?.id === a._addonId);
       const bi = enabledAddons.findIndex(ad => ad.manifest?.id === b._addonId);
       if (ai !== bi) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
@@ -141,11 +171,12 @@ export default function DetailPage() {
 
     setStreams(sorted);
     setStreamsLoading(false);
+    // Cache for 2 hours
+    setCachedStreams(type, imdbId || id, sorted);
     if (results.length === 0) addToast('No streams found. Try installing addons.', 'warning');
   };
 
   const handleStreamPlay = (stream, resume = false) => {
-    if (!activeProfile) { navigate('/onboarding'); return; }
     const cls = classifyStream(stream);
     const streamTitle = detail?.title || detail?.name || 'Stream';
     const baseParams = { title: streamTitle, id: String(id), type };
@@ -161,7 +192,7 @@ export default function DetailPage() {
       navigate(`/player?${p.toString()}`);
       return;
     }
-    const url = buildPlayableUrl(stream, settings.corsProxy);
+    const url = buildPlayableUrl(stream, settings.effectiveCorsProxy);
     if (url) {
       const p = new URLSearchParams({ ...baseParams, url });
       navigate(`/player?${p.toString()}`);
@@ -204,14 +235,10 @@ export default function DetailPage() {
     return (
       <div className="page detail-page">
         <div className="detail-backdrop-skeleton" />
-        <div className="detail-content container">
-          <div className="detail-layout">
-            <div className="skeleton" style={{ aspectRatio: '2/3', borderRadius: 'var(--radius-lg)', width: 250 }} />
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingTop: '2rem' }}>
-              <div className="skeleton" style={{ height: '2rem', width: '60%' }} />
-              <div className="skeleton" style={{ height: '1rem', width: '40%' }} />
-              <div className="skeleton" style={{ height: '4rem', width: '100%' }} />
-            </div>
+        <div className="detail-content container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
+          <div style={{ textAlign: 'center' }}>
+            <img src={LogoSvg} alt="Loading..." className="loading-logo-pulse" style={{ width: '120px', height: 'auto', filter: 'drop-shadow(0 0 24px var(--primary-glow))' }} />
+            <p style={{ color: 'var(--text-muted)', marginTop: '1rem' }}>Loading...</p>
           </div>
         </div>
       </div>
@@ -273,7 +300,7 @@ export default function DetailPage() {
                 </button>
               )}
               {type === 'movie' && (
-                <button className="btn btn-secondary" onClick={loadStreams}>
+                <button className="btn btn-secondary" onClick={() => loadStreams(true)}>
                   {streams.length > 0 ? '↻ Refresh' : '▶ Find Streams'}
                 </button>
               )}
@@ -319,7 +346,9 @@ export default function DetailPage() {
           <div className="detail-streams">
             <div className="detail-streams-header">
               <h2 className="section-title">
-                {streamsLoading && streams.length === 0 ? '🔍 Searching...' : '🎯 Streams'}
+                {streamsLoading && streams.length === 0 ? (
+                  <span className="stream-searching">⚡ Searching for streams...</span>
+                ) : '🎯 Streams'}
               </h2>
               {streams.length > 0 && (
                 <div className="stream-filters">

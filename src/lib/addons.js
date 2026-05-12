@@ -237,31 +237,20 @@ export function getStreamTitle(stream) {
 }
 
 export function buildPlayableUrl(stream, proxyUrl) {
-  if (!stream.url) return null;
+  if (!stream.url && !stream.externalUrl) return null;
   const cls = classifyStream(stream);
-  if (proxyUrl && (cls === 'needs-proxy' || stream.behaviorHints?.proxyHeaders)) {
-    const encoded = encodeURIComponent(stream.url);
-    const hasQuery = proxyUrl.includes('?');
-    let finalUrl;
-    if (hasQuery || proxyUrl.endsWith('/cors')) {
-      const sep = proxyUrl.includes('?') ? '&' : '?';
-      const param = proxyUrl.includes('url=') ? '' : 'url=';
-      finalUrl = `${proxyUrl}${sep}${param}${encoded}`;
-    } else {
-      const base = proxyUrl.endsWith('/') ? proxyUrl : `${proxyUrl}/`;
-      finalUrl = `${base}${stream.url}`;
+
+  if (proxyUrl && stream.url && (cls === 'needs-proxy' || stream.behaviorHints?.proxyHeaders)) {
+    try {
+      // Always use ?url= query-param format — matches openprox's GET /proxy?url= route
+      const parsedProxy = new URL(proxyUrl);
+      parsedProxy.searchParams.set('url', stream.url);
+      return parsedProxy.toString();
+    } catch {
+      return stream.url;
     }
-    // Inject Stremio UA for TorBox
-    const isTorBox = (stream.url && stream.url.includes('torbox.app')) ||
-                    (stream._addonUrl && stream._addonUrl.includes('torbox'));
-    const headers = { ...stream.behaviorHints?.proxyHeaders };
-    if (isTorBox) headers['User-Agent'] = 'Stremio/1.6.11';
-    if (Object.keys(headers).length > 0) {
-      const headerStr = encodeURIComponent(JSON.stringify(headers));
-      finalUrl += (finalUrl.includes('?') ? '&' : '?') + `headers=${headerStr}`;
-    }
-    return finalUrl;
   }
+
   if (stream.externalUrl) return stream.externalUrl;
   return stream.url;
 }
