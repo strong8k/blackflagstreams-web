@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import Hls from 'hls.js';
 import { useStore } from '../lib/store';
 import { xtreamGetLiveCategories, xtreamGetLiveStreams, xtreamStreamURL, xtreamGetEPG, decryptCreds } from '../lib/iptv';
@@ -35,14 +35,25 @@ export default function IPTVPage() {
   const loadProvider = async (provider) => {
     setLoading(true); setError(null);
     try {
-      const creds = provider._enc ? await decryptCreds(provider._enc) : null;
-      const p = creds ? { ...provider, ...creds } : provider;
-      const cats = await xtreamGetLiveCategories(p);
-      setCategories(cats || []);
-      if (cats?.length > 0) {
-        setActiveCategory(cats[0]);
-        const chs = await xtreamGetLiveStreams(p, cats[0].category_id);
-        setChannels(chs || []);
+      if (provider.type === 'm3u') {
+        const allChannels = provider.channels || [];
+        const groups = [...new Set(allChannels.map(ch => ch.group || 'Uncategorized'))];
+        const cats = groups.map(g => ({ category_id: g, category_name: g }));
+        setCategories(cats);
+        if (cats.length > 0) {
+          setActiveCategory(cats[0]);
+          setChannels(allChannels.filter(ch => (ch.group || 'Uncategorized') === cats[0].category_id));
+        }
+      } else {
+        const creds = provider._enc ? await decryptCreds(provider._enc) : null;
+        const p = creds ? { ...provider, ...creds } : provider;
+        const cats = await xtreamGetLiveCategories(p);
+        setCategories(cats || []);
+        if (cats?.length > 0) {
+          setActiveCategory(cats[0]);
+          const chs = await xtreamGetLiveStreams(p, cats[0].category_id);
+          setChannels(chs || []);
+        }
       }
       setLoading(false);
     } catch (e) {
@@ -55,6 +66,11 @@ export default function IPTVPage() {
     setActiveCategory(cat);
     setChannels([]);
     const provider = providers[0];
+    if (provider.type === 'm3u') {
+      const allChannels = provider.channels || [];
+      setChannels(allChannels.filter(ch => (ch.group || 'Uncategorized') === cat.category_id));
+      return;
+    }
     const creds = provider._enc ? await decryptCreds(provider._enc) : null;
     const p = creds ? { ...provider, ...creds } : provider;
     try {
@@ -63,36 +79,41 @@ export default function IPTVPage() {
     } catch { setChannels([]); }
   };
 
+  const playUrl = (url) => {
+    if (!videoRef.current) return;
+    if (hlsRef.current) hlsRef.current.destroy();
+    if (Hls.isSupported() && (url.includes('.m3u8') || !url.includes('.'))) {
+      const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+      hls.loadSource(url);
+      hls.attachMedia(videoRef.current);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => videoRef.current.play().catch(() => {}));
+      hlsRef.current = hls;
+    } else {
+      videoRef.current.src = url;
+      videoRef.current.play().catch(() => {});
+    }
+    setStreamUrl(url);
+  };
+
   const selectChannel = async (ch) => {
     setActiveChannel(ch);
     const provider = providers[0];
+
+    if (provider.type === 'm3u') {
+      setEpgData([]);
+      playUrl(ch.url);
+      return;
+    }
+
     const creds = provider._enc ? await decryptCreds(provider._enc) : null;
     const p = creds ? { ...provider, ...creds } : provider;
 
-    // Load EPG
     try {
       const epg = await xtreamGetEPG(p, ch.stream_id);
       setEpgData(epg?.epg_listings || []);
     } catch { setEpgData([]); }
 
-    // Build stream URL
-    const url = xtreamStreamURL(p, ch.stream_id);
-
-    // Play in video element
-    if (videoRef.current) {
-      if (hlsRef.current) hlsRef.current.destroy();
-      if (Hls.isSupported()) {
-        const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
-        hls.loadSource(url);
-        hls.attachMedia(videoRef.current);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => videoRef.current.play().catch(() => {}));
-        hlsRef.current = hls;
-      } else {
-        videoRef.current.src = url;
-        videoRef.current.play().catch(() => {});
-      }
-    }
-    setStreamUrl(url);
+    playUrl(xtreamStreamURL(p, ch.stream_id));
   };
 
   if (!['account', 'premium', 'pro', 'ultra'].includes(tier)) {
@@ -126,7 +147,10 @@ export default function IPTVPage() {
       <div className="iptv-layout">
         {/* Categories sidebar */}
         <div className="iptv-categories">
-          <div className="iptv-cat-header">Categories</div>
+          <div className="iptv-cat-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Categories</span>
+            <Link to="/iptv/setup" style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textDecoration: 'none' }}>Manage</Link>
+          </div>
           <div className="iptv-cat-list">
             {categories.map(cat => (
               <button
@@ -151,23 +175,28 @@ export default function IPTVPage() {
             ) : channels.length === 0 ? (
               <p className="empty-state">No channels in this category.</p>
             ) : (
-              channels.map(ch => (
-                <button
-                  key={ch.stream_id}
-                  className={`iptv-ch-item${activeChannel?.stream_id === ch.stream_id ? ' active' : ''}`}
-                  onClick={() => selectChannel(ch)}
-                >
-                  {ch.stream_icon && (
-                    <img src={ch.stream_icon} alt="" className="iptv-ch-logo" loading="lazy" />
-                  )}
-                  <div className="iptv-ch-info">
-                    <div className="iptv-ch-name">{ch.name}</div>
-                    {ch.epg_channel_id && (
-                      <div className="iptv-ch-epg">{ch.epg_channel_id}</div>
-                    )}
-                  </div>
-                </button>
-              ))
+              channels.map((ch, i) => {
+                const key = ch.stream_id ?? ch.url ?? i;
+                const logo = ch.stream_icon || ch.logo;
+                const isActive = activeChannel
+                  ? (ch.stream_id != null ? activeChannel.stream_id === ch.stream_id : activeChannel.url === ch.url)
+                  : false;
+                return (
+                  <button
+                    key={key}
+                    className={`iptv-ch-item${isActive ? ' active' : ''}`}
+                    onClick={() => selectChannel(ch)}
+                  >
+                    {logo && <img src={logo} alt="" className="iptv-ch-logo" loading="lazy" />}
+                    <div className="iptv-ch-info">
+                      <div className="iptv-ch-name">{ch.name}</div>
+                      {ch.epg_channel_id && (
+                        <div className="iptv-ch-epg">{ch.epg_channel_id}</div>
+                      )}
+                    </div>
+                  </button>
+                );
+              })
             )}
           </div>
         </div>
@@ -191,8 +220,8 @@ export default function IPTVPage() {
             <div className="iptv-epg">
               <div className="iptv-epg-header">
                 <div className="iptv-epg-channel-name">
-                  {activeChannel.stream_icon && (
-                    <img src={activeChannel.stream_icon} alt="" className="iptv-epg-logo" />
+                  {(activeChannel.stream_icon || activeChannel.logo) && (
+                    <img src={activeChannel.stream_icon || activeChannel.logo} alt="" className="iptv-epg-logo" />
                   )}
                   <div>
                     <strong>{activeChannel.name}</strong>

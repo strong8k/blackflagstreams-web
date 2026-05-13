@@ -54,9 +54,9 @@ async function testTorBoxKey(apiKey, corsProxy) {
       const body = await res.text();
       WARN('Proxy fetch HTTP error:', res.status, body.slice(0, 200));
       if (res.status === 401) throw new Error('Invalid API key (401)');
-      throw new Error(`Proxy HTTP ${res.status}`);
+      // Non-auth errors — fall through to relay, don't throw
     } catch (e) {
-      if (e.message.startsWith('Invalid') || e.message.startsWith('Proxy HTTP')) throw e;
+      if (e.message.startsWith('Invalid')) throw e;
       WARN('Proxy fetch failed:', e.message, '— trying backend relay...');
     }
   } else {
@@ -83,19 +83,16 @@ async function testTorBoxKey(apiKey, corsProxy) {
     ERR('Relay fetch HTTP error:', res.status, body.slice(0, 200));
     if (res.status === 404) {
       throw new Error(
-        'TorBox connection failed — CORS proxy is blocking the request AND backend relay (/api/proxy/torbox) is not yet implemented. ' +
-        'Fix: add bfsv2.pages.dev to the proxy CORS allowlist on bfsprox, OR implement the relay endpoint.'
+        'TorBox relay endpoint not found on openprox Worker. Redeploy the openprox Worker (D:\\SyncThings\\Projects\\openprox) with: npx wrangler deploy'
       );
     }
     throw new Error(`Backend relay failed (${res.status})`);
   } catch (e) {
     if (e.message.startsWith('TorBox connection') || e.message.startsWith('Backend relay')) throw e;
     // Likely a CORS preflight failure on the relay itself — backend needs to allow this origin
-    ERR('Relay fetch network error (backend CORS?):', e.message);
-    ERR('Fix needed: add', window.location.origin, 'to allowed origins on', apiBase);
+    ERR('Relay fetch network error:', e.message);
     throw new Error(
-      `All fetch methods failed. The CORS proxy at bfsprox is blocking ${window.location.origin}. ` +
-      'Add this origin to the proxy allowlist, or implement /api/proxy/torbox on the backend.'
+      `All fetch methods failed. Check that openprox Worker is deployed and allows ${window.location.origin}.`
     );
   }
 }

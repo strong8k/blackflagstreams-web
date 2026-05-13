@@ -1,26 +1,119 @@
 /* ═══════════════════════════════════════════════════════
-   TMDB API Client
+   TMDB API Client — with IDB response caching
    ═══════════════════════════════════════════════════════ */
 
 const TMDB_BASE = 'https://api.themoviedb.org/3';
 const IMG_BASE  = 'https://image.tmdb.org/t/p';
 
+// Cache TTLs
+const CACHE_TTL = {
+  details: 24 * 3600 * 1000,   // 24h — movie/show details
+  lists: 3600 * 1000,           // 1h — popular/trending lists
+  search: 600 * 1000,           // 10min — search results
+  images: 7 * 24 * 3600 * 1000, // 1 week — image URLs (just metadata, not binary)
+  streams: 2 * 3600 * 1000,     // 2h — stream results
+};
+
+// ── IDB cache helpers ──
+let _idb = null;
+async function getIDB() {
+  if (_idb) return _idb;
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('bfs_cache', 1);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore('tmdb');
+      req.result.createObjectStore('streams');
+    };
+    req.onsuccess = () => { _idb = req.result; resolve(_idb); };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function cacheGet(storeName, key) {
+  try {
+    const db = await getIDB();
+    return new Promise(resolve => {
+      const tx = db.transaction(storeName, 'readonly');
+      const req = tx.objectStore(storeName).get(key);
+      req.onsuccess = () => {
+        const entry = req.result;
+        if (!entry) return resolve(null);
+        if (Date.now() - entry.ts > entry.ttl) {
+          // Expired — delete async, don't await
+          const delTx = db.transaction(storeName, 'readwrite');
+          delTx.objectStore(storeName).delete(key);
+          return resolve(null);
+        }
+        resolve(entry.data);
+      };
+      req.onerror = () => resolve(null);
+    });
+  } catch { return null; }
+}
+
+async function cacheSet(storeName, key, data, ttl) {
+  try {
+    const db = await getIDB();
+    const tx = db.transaction(storeName, 'readwrite');
+    tx.objectStore(storeName).put({ data, ts: Date.now(), ttl }, key);
+  } catch { /* silent */ }
+}
+
+export async function clearAllCaches() {
+  try {
+    const db = await getIDB();
+    const tx = db.transaction(['tmdb', 'streams'], 'readwrite');
+    tx.objectStore('tmdb').clear();
+    tx.objectStore('streams').clear();
+    return true;
+  } catch { return false; }
+}
+
+export async function clearStreamCache() {
+  try {
+    const db = await getIDB();
+    const tx = db.transaction('streams', 'readwrite');
+    tx.objectStore('streams').clear();
+    return true;
+  } catch { return false; }
+}
+
+export async function clearImageCache() {
+  // Image caching is handled by the browser's HTTP cache.
+  // This clears our TMDB metadata cache, forcing fresh API calls which
+  // regenerate image URLs — the browser may still use cached images.
+  try {
+    const db = await getIDB();
+    const tx = db.transaction('tmdb', 'readwrite');
+    tx.objectStore('tmdb').clear();
+    return true;
+  } catch { return false; }
+}
+
+// ── Key helpers ──
 function getKey() {
   return localStorage.getItem('bfs_user_tmdb_key') || localStorage.getItem('bfs_tmdb_key') || '';
 }
 
-async function tmdb(path, params = {}) {
+async function tmdb(path, params = {}, ttl = CACHE_TTL.lists) {
   const key = getKey();
   if (!key) throw new Error('No TMDB API key configured');
   const url = new URL(`${TMDB_BASE}${path}`);
   url.searchParams.set('api_key', key);
   Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null) url.searchParams.set(k, v); });
+
+  const cacheKey = url.toString();
+  const cached = await cacheGet('tmdb', cacheKey);
+  if (cached) return cached;
+
   const res = await fetch(url.toString());
   if (!res.ok) {
     if (res.status === 401) throw new Error('Invalid API key');
     throw new Error(`TMDB error: ${res.status}`);
   }
-  return res.json();
+  const data = await res.json();
+  cacheSet('tmdb', cacheKey, data, ttl);
+  return data;
 }
 
 // ── Image helpers ──
@@ -51,7 +144,7 @@ export async function getNowPlayingMovies(page = 1) {
 export async function getMovieDetails(id) {
   return tmdb(`/movie/${id}`, {
     append_to_response: 'videos,credits,external_ids,recommendations,similar',
-  });
+  }, CACHE_TTL.details);
 }
 
 // ── TV ──
@@ -66,15 +159,20 @@ export async function getTopRatedTV(page = 1) {
 export async function getTVDetails(id) {
   return tmdb(`/tv/${id}`, {
     append_to_response: 'videos,credits,external_ids,recommendations,similar',
-  });
+  }, CACHE_TTL.details);
 }
 
 export async function getSeasonDetails(tvId, seasonNumber) {
-  return tmdb(`/tv/${tvId}/season/${seasonNumber}`);
+  return tmdb(`/tv/${tvId}/season/${seasonNumber}`, {}, CACHE_TTL.details);
 }
 
 export async function getExternalIds(type, id) {
-  return tmdb(`/${type}/${id}/external_ids`);
+  return tmdb(`/${type}/${id}/external_ids`, {}, CACHE_TTL.details);
+}
+
+// ── Find by external ID (IMDB → TMDB) ──
+export async function findByExternalId(imdbId) {
+  return tmdb(`/find/${imdbId}`, { external_source: 'imdb_id' }, CACHE_TTL.details);
 }
 
 // ── Discover ──
@@ -88,7 +186,7 @@ export async function discoverTV(params = {}) {
 
 // ── Search ──
 export async function searchMulti(query, page = 1) {
-  return tmdb('/search/multi', { query, page });
+  return tmdb('/search/multi', { query, page }, CACHE_TTL.search);
 }
 
 // ── Genres ──
@@ -96,12 +194,21 @@ let genreCache = null;
 export async function getGenres(type) {
   if (!genreCache) {
     const [movie, tv] = await Promise.all([
-      tmdb('/genre/movie/list'),
-      tmdb('/genre/tv/list'),
+      tmdb('/genre/movie/list', {}, 24 * 3600 * 1000),
+      tmdb('/genre/tv/list', {}, 24 * 3600 * 1000),
     ]);
     genreCache = { movie: movie.genres || [], tv: tv.genres || [] };
   }
   return genreCache[type] || [];
+}
+
+// ── Stream caching ──
+export async function getCachedStreams(type, id) {
+  return cacheGet('streams', `${type}:${id}`);
+}
+
+export async function setCachedStreams(type, id, streams) {
+  return cacheSet('streams', `${type}:${id}`, streams, CACHE_TTL.streams);
 }
 
 // ── Helpers ──
@@ -110,8 +217,7 @@ export async function getNextEpisode(tvId, currentSeason, currentEpisode) {
     const season = await getSeasonDetails(tvId, currentSeason);
     const nextEp = season.episodes?.find(e => e.episode_number === Number(currentEpisode) + 1);
     if (nextEp) return { season: currentSeason, episode: nextEp.episode_number };
-    
-    // Check next season
+
     const series = await getTVDetails(tvId);
     const nextSeasonNum = Number(currentSeason) + 1;
     const nextSeason = series.seasons?.find(s => s.season_number === nextSeasonNum);

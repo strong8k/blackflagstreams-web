@@ -1,16 +1,17 @@
-import React from 'react';
-import { motion } from 'framer-motion';
+import React, { useEffect, useState, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
+import { getNowPlayingMovies, getTrending, img } from '../lib/tmdb';
 import LogoSvg from '../assets/bfs.svg';
 import './LandingPage.css';
 
 const FEATURES = [
-  { icon: '🎬', title: 'Movies & Series', desc: 'Browse TMDB metadata. Stream from Stremio addons. No account needed.' },
-  { icon: '📡', title: 'Live TV Built-In', desc: 'Native IPTV player. Xtream Codes & M3U. EPG guide. Like TiviMate but better.' },
-  { icon: '🧩', title: 'Stremio Addon Compatible', desc: 'Install any Stremio addon. Torrentio, Comet, MediaFusion — they all just work.' },
+  { icon: '🎬', title: 'Movies & Series', desc: 'Browse TMDB metadata. Stream from Stremio addons.' },
+  { icon: '📡', title: 'Live TV Built-In', desc: 'Native IPTV player. Xtream Codes & M3U. EPG guide.' },
+  { icon: '🧩', title: 'Stremio Addon Compatible', desc: 'Any Stremio addon. Torrentio, Comet, MediaFusion — they all just work.' },
   { icon: '☁️', title: 'Cloud Sync', desc: 'Watchlist, progress, and settings sync across all your devices.' },
   { icon: '🏴‍☠️', title: 'Your Streams, Your Way', desc: 'Multiple profiles. Parental PINs. Continue watching. No tracking.' },
-  { icon: '💰', title: 'Free to Start', desc: 'Landlubber tier is completely free. Upgrade for IPTV, sync, and more profiles.' },
+  { icon: '⚡', title: 'TorBox Integration', desc: 'Instant cached torrents. Debrid streaming at full speed.' },
 ];
 
 const TIERS = [
@@ -20,44 +21,135 @@ const TIERS = [
   { name: 'First Mate', price: '$20/yr', features: ['6 Profiles', 'Unlimited Addons', '5 IPTV Providers', 'Everything in Buccaneer', 'Priority Support'] },
 ];
 
+const HERO_INTERVAL = 4000;
+
+function HeroSlide({ item }) {
+  const backdrop = item.backdrop_path ? img.backdrop(item.backdrop_path, 'w1280') : null;
+  const title = item.title || item.name;
+  const year = (item.release_date || item.first_air_date || '').substring(0, 4);
+  const overview = item.overview ? (item.overview.length > 180 ? item.overview.substring(0, 180) + '...' : item.overview) : '';
+
+  return (
+    <motion.div
+      className="hero-slide"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.5, ease: 'easeOut' }}
+    >
+      {backdrop && (
+        <div className="hero-slide-bg" style={{ backgroundImage: `url(${backdrop})` }}>
+          <div className="hero-slide-gradient" />
+        </div>
+      )}
+      <div className="hero-slide-movie-info">
+        <h3 className="hero-slide-movie-title">{title}</h3>
+        <div className="hero-slide-movie-meta">{year}{item.vote_average ? ` • ★ ${item.vote_average.toFixed(1)}` : ''}</div>
+        {overview && <p className="hero-slide-movie-desc">{overview}</p>}
+      </div>
+    </motion.div>
+  );
+}
+
 export default function LandingPage({ onStart, onSignIn }) {
+  const [heroItems, setHeroItems] = useState([]);
+  const [activeIdx, setActiveIdx] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [nowPlaying, trending] = await Promise.all([
+          getNowPlayingMovies(),
+          getTrending('movie', 'week'),
+        ]);
+        if (cancelled) return;
+        const merged = [...(nowPlaying.results || []), ...(trending.results || [])];
+        const seen = new Set();
+        const unique = merged.filter(m => {
+          if (seen.has(m.id) || !m.backdrop_path) return false;
+          seen.add(m.id);
+          return true;
+        }).slice(0, 15);
+        setHeroItems(unique);
+      } catch { /* silent */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const next = useCallback(() => {
+    setActiveIdx(i => (i + 1) % heroItems.length);
+  }, [heroItems.length]);
+
+  useEffect(() => {
+    if (heroItems.length < 2) return;
+    const timer = setInterval(next, HERO_INTERVAL);
+    return () => clearInterval(timer);
+  }, [heroItems.length, next]);
+
   return (
     <div className="landing-page">
-      {/* Hero */}
+      {/* Hero Carousel */}
       <section className="landing-hero">
-        <div className="landing-hero-bg" />
-        <div className="landing-hero-content">
-          <motion.div
-            initial={{ opacity: 0, y: 40 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-          >
-            <div className="landing-logo-container">
-              <img src={LogoSvg} alt="BlackFlagStreams" className="landing-logo-img" />
+        {heroItems.length > 0 ? (
+          <>
+            <div className="hero-slides-wrapper">
+              <AnimatePresence initial={false}>
+                <HeroSlide key={heroItems[activeIdx]?.id} item={heroItems[activeIdx]} />
+              </AnimatePresence>
             </div>
-            <h1 className="landing-title">
-              BlackFlag<span>Streams</span>
-            </h1>
-            <p className="landing-subtitle">
-              The streaming app that puts you in command. Stremio addons, built-in IPTV, no account required.
-              Stream anything. Pay nothing.
-            </p>
-            <div className="landing-hero-actions">
-              <button className="btn btn-primary" style={{ padding: '0.85rem 2.5rem', fontSize: '1rem' }} onClick={() => onStart && onStart('register')}>
-                Set Sail — It's Free
-              </button>
-              <button className="btn btn-secondary" style={{ padding: '0.85rem 2rem', fontSize: '1rem' }} onClick={onSignIn}>
-                Sign In
-              </button>
+
+            {/* Dots */}
+            <div className="hero-dots">
+              {heroItems.map((_, i) => (
+                <button
+                  key={i}
+                  className={`hero-dot${i === activeIdx ? ' active' : ''}`}
+                  onClick={() => setActiveIdx(i)}
+                  aria-label={`Slide ${i + 1}`}
+                />
+              ))}
             </div>
-          </motion.div>
-        </div>
+
+            {/* Branding Overlay */}
+            <div className="hero-branding">
+              <img src={LogoSvg} alt="BlackFlagStreams" className="hero-brand-logo" />
+              <h1 className="hero-brand-title">BlackFlag<span>Streams</span></h1>
+              <p className="hero-brand-tagline">Stream Anything.</p>
+              <div className="hero-brand-actions">
+                <button className="btn btn-primary" style={{ padding: '0.8rem 2.5rem', fontSize: '1rem' }} onClick={() => onStart && onStart('register')}>
+                  Set Sail
+                </button>
+                <button className="btn btn-secondary" style={{ padding: '0.8rem 2rem', fontSize: '1rem' }} onClick={onSignIn}>
+                  Sign In
+                </button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="landing-hero-fallback">
+            <div className="landing-hero-bg" />
+            <div className="landing-hero-content">
+              <motion.div initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
+                <div className="landing-logo-container">
+                  <img src={LogoSvg} alt="BlackFlagStreams" className="landing-logo-img" />
+                </div>
+                <h1 className="landing-title">BlackFlag<span>Streams</span></h1>
+                <p className="landing-subtitle">Stream Anything.</p>
+                <div className="landing-hero-actions">
+                  <button className="btn btn-primary" style={{ padding: '0.85rem 2.5rem', fontSize: '1rem' }} onClick={() => onStart && onStart('register')}>Set Sail</button>
+                  <button className="btn btn-secondary" style={{ padding: '0.85rem 2rem', fontSize: '1rem' }} onClick={onSignIn}>Sign In</button>
+                </div>
+              </motion.div>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* Features */}
       <section className="landing-features">
         <h2 className="section-title" style={{ textAlign: 'center', justifyContent: 'center', marginBottom: '2.5rem' }}>
-          Everything You Need. Nothing You Don't.
+          Everything You Need.
         </h2>
         <div className="landing-features-grid">
           {FEATURES.map((f, i) => (
@@ -105,15 +197,6 @@ export default function LandingPage({ onStart, onSignIn }) {
             </motion.div>
           ))}
         </div>
-      </section>
-
-      {/* CTA */}
-      <section className="landing-cta">
-        <h2>Ready to Sail?</h2>
-        <p>No credit card. No bullshit. Just streams.</p>
-        <button className="btn btn-gold" style={{ padding: '0.85rem 2.5rem', fontSize: '1rem' }} onClick={() => onStart && onStart('free')}>
-          ☠️ Set Sail Now
-        </button>
       </section>
 
       <footer className="landing-footer">

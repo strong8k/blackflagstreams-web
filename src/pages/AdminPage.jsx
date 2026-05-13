@@ -9,10 +9,9 @@ const ERR = (...a) => console.error('[BFS:Admin]', ...a);
 
 // ── Admin 2FA Login ──
 function AdminLogin({ onAuth }) {
-  const [step, setStep] = useState('token'); // 'token' | 'otp'
+  const [step, setStep] = useState('token'); // 'token' | 'totp'
   const [adminToken, setAdminToken] = useState('');
   const [otp, setOtp] = useState('');
-  const [maskedEmail, setMaskedEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const addToast = useStore(s => s.addToast);
@@ -22,15 +21,20 @@ function AdminLogin({ onAuth }) {
     if (!adminToken.trim()) return;
     setLoading(true);
     setError('');
-    LOG('Step 1: requesting OTP for admin token...');
     try {
       const res = await requestAdminOtp(adminToken.trim());
-      setMaskedEmail(res.email || 'your admin email');
-      setStep('otp');
-      addToast('OTP sent to admin email', 'info');
-      LOG('OTP requested, email hint:', res.email);
+      // Bypass: 2FA disabled or not yet configured — session granted directly
+      if (res.bypassed) {
+        LOG('2FA bypassed:', res.reason, '— session granted');
+        addToast(res.reason === '2FA_NOT_CONFIGURED' ? 'Access granted — configure 2FA in the 2FA tab' : 'Access Granted ⚓', 'success');
+        onAuth(res.session);
+        return;
+      }
+      // TOTP required — prompt for authenticator app code
+      setStep('totp');
+      addToast('Enter the code from your authenticator app', 'info');
     } catch (e) {
-      ERR('OTP request failed:', e.message);
+      ERR('Token submit failed:', e.message);
       setError(e.message);
     } finally {
       setLoading(false);
@@ -39,10 +43,9 @@ function AdminLogin({ onAuth }) {
 
   const handleOtpSubmit = async (e) => {
     e.preventDefault();
-    if (otp.length !== 6) { setError('Enter the 6-digit code from your email'); return; }
+    if (otp.length !== 6) { setError('Enter the 6-digit code from your authenticator app'); return; }
     setLoading(true);
     setError('');
-    LOG('Step 2: verifying OTP...');
     try {
       const res = await verifyAdminOtp(adminToken.trim(), otp);
       LOG('Admin authenticated. Session:', res.adminSession?.slice(0, 8) + '...');
@@ -64,8 +67,8 @@ function AdminLogin({ onAuth }) {
           <h2>Ops Console</h2>
           <p>
             {step === 'token'
-              ? 'Enter your admin token to request a one-time code.'
-              : `Enter the 6-digit code sent to ${maskedEmail}`}
+              ? 'Enter your admin token to continue.'
+              : 'Enter the 6-digit code from your authenticator app.'}
           </p>
         </div>
 
@@ -84,13 +87,13 @@ function AdminLogin({ onAuth }) {
             </div>
             {error && <p className="admin-error">{error}</p>}
             <button type="submit" className="btn btn-gold" style={{ width: '100%', marginTop: '1rem' }} disabled={loading}>
-              {loading ? 'Sending Code...' : 'Request One-Time Code →'}
+              {loading ? 'Verifying...' : 'Continue →'}
             </button>
           </form>
         ) : (
           <form onSubmit={handleOtpSubmit}>
             <div className="form-group">
-              <label>One-Time Code</label>
+              <label>Authenticator Code</label>
               <input
                 type="text"
                 inputMode="numeric"
@@ -151,7 +154,7 @@ export default function AdminPage() {
       <main className="admin-content">
         {view === 'dashboard' && <DashboardView adminSession={adminSession} />}
         {view === 'users' && <UsersView adminSession={adminSession} />}
-        {view === 'addons' && <AddonsView />}
+        {view === 'addons' && <AddonsView adminSession={adminSession} />}
         {view === 'config' && <ConfigView adminSession={adminSession} />}
         {view === 'danger' && <DangerView adminSession={adminSession} />}
       </main>
@@ -211,6 +214,13 @@ function UsersView({ adminSession }) {
   const [search, setSearch] = useState('');
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [editingUser, setEditingUser] = useState(null);
+  const [editForm, setEditForm] = useState({
+    tier: 'free', banned: false, isBeta: false, isUltra: false,
+    email: '', newPassword: '', billingPrice: '', sendPasswordEmail: true,
+  });
+  const [saving, setSaving] = useState(false);
+  const addToast = useStore(s => s.addToast);
 
   React.useEffect(() => {
     import('../lib/auth').then(({ getApiBaseUrl }) => {
@@ -222,6 +232,42 @@ function UsersView({ adminSession }) {
         .catch(e => { ERR('users fetch:', e.message); setLoading(false); });
     });
   }, [adminSession, search]);
+
+  const openEdit = (user) => {
+    setEditingUser(user);
+    setEditForm({
+      tier: user.tier || 'free',
+      banned: user.banned || false,
+      isBeta: user.isBeta || false,
+      isUltra: user.isUltra || false,
+      email: user.email || '',
+      newPassword: '',
+      billingPrice: user.billingPrice || '',
+      sendPasswordEmail: true,
+    });
+  };
+
+  const handleSaveUser = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const { getApiBaseUrl } = await import('../lib/auth');
+      const res = await fetch(`${getApiBaseUrl()}/api/admin/users`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Session': adminSession },
+        body: JSON.stringify({ userId: editingUser.id, ...editForm }),
+      });
+      if (!res.ok) throw new Error(`Save failed (${res.status})`);
+      addToast(`${editingUser.name || editingUser.email} updated`, 'success');
+      setEditingUser(null);
+      // Refresh the list
+      setSearch(s => s + ' '); setTimeout(() => setSearch(s => s.trim()), 50);
+    } catch (e) {
+      addToast(e.message, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="admin-view">
@@ -263,7 +309,7 @@ function UsersView({ adminSession }) {
                   <td>{u.created ? new Date(u.created).toLocaleDateString() : '—'}</td>
                   <td>
                     <div className="table-actions">
-                      <button className="btn-icon" title="Edit">⚙</button>
+                      <button className="btn-icon" title="Edit" onClick={() => openEdit(u)}>⚙</button>
                     </div>
                   </td>
                 </tr>
@@ -272,34 +318,255 @@ function UsersView({ adminSession }) {
           </table>
         )}
       </div>
+
+      {/* Edit User Modal */}
+      {editingUser && (
+        <div className="modal-overlay" onClick={() => setEditingUser(null)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '480px', maxHeight: '90vh', overflow: 'auto' }}>
+            <h3>Edit Sailor</h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1rem' }}>
+              {editingUser.name || editingUser.email} <span style={{ color: 'var(--text-muted)' }}>— ID: {editingUser.id?.slice(0, 8)}...</span>
+            </p>
+            <form onSubmit={handleSaveUser}>
+              <div className="form-group">
+                <label>Email</label>
+                <input type="email" value={editForm.email} onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))} placeholder={editingUser.email} />
+              </div>
+
+              <div className="form-group">
+                <label>Tier</label>
+                <select value={editForm.tier} onChange={e => setEditForm(f => ({ ...f, tier: e.target.value }))}>
+                  <option value="free">Free — Landlubber</option>
+                  <option value="account">Account — Deckhand</option>
+                  <option value="premium">Premium — Buccaneer</option>
+                  <option value="pro">Pro — First Mate</option>
+                  <option value="ultra">Ultra — Captain</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label>Billing Price (USD, applies next cycle)</label>
+                <input type="text" value={editForm.billingPrice} onChange={e => setEditForm(f => ({ ...f, billingPrice: e.target.value }))} placeholder="e.g. 10.00" />
+              </div>
+
+              <div className="form-group">
+                <label>New Password {editForm.sendPasswordEmail && '(emailed to user)'}</label>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <input type="text" value={editForm.newPassword} onChange={e => setEditForm(f => ({ ...f, newPassword: e.target.value }))} placeholder="Leave blank to keep current" style={{ flex: 1 }} />
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => {
+                    const pw = Array.from(crypto.getRandomValues(new Uint8Array(4)), b => b.toString(36)).join('').slice(0, 10);
+                    setEditForm(f => ({ ...f, newPassword: pw }));
+                  }} style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
+                    🎲 Generate
+                  </button>
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={editForm.sendPasswordEmail}
+                    onChange={e => setEditForm(f => ({ ...f, sendPasswordEmail: e.target.checked }))} />
+                  Send password reset email
+                </label>
+              </div>
+
+              <hr style={{ border: 'none', borderTop: '1px solid var(--border-subtle)', margin: '0.75rem 0' }} />
+
+              <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input type="checkbox" id="adm-beta" checked={editForm.isBeta}
+                  onChange={e => setEditForm(f => ({ ...f, isBeta: e.target.checked }))} />
+                <label htmlFor="adm-beta" style={{ cursor: 'pointer', margin: 0 }}>BETA Tester <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(free Premium upgrade)</span></label>
+              </div>
+
+              <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input type="checkbox" id="adm-ultra" checked={editForm.isUltra}
+                  onChange={e => setEditForm(f => ({ ...f, isUltra: e.target.checked }))} />
+                <label htmlFor="adm-ultra" style={{ cursor: 'pointer', margin: 0 }}>Ultra Captain <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(separate plan, unlimited everything)</span></label>
+              </div>
+
+              <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input type="checkbox" id="adm-banned" checked={editForm.banned}
+                  onChange={e => setEditForm(f => ({ ...f, banned: e.target.checked }))} />
+                <label htmlFor="adm-banned" style={{ cursor: 'pointer', margin: 0 }}>Banned <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(walk the plank)</span></label>
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setEditingUser(null)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={saving}>
+                  {saving ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function AddonsView() {
+const TARGET_LABELS = { all: 'All Users', beta: 'Beta Only', ultra: 'Ultra Only' };
+
+function AddonsView({ adminSession }) {
+  const [globalAddons, setGlobalAddons] = useState([]);
+  const [recommended, setRecommended] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [addForm, setAddForm] = useState({ url: '', name: '', description: '', target: 'all', type: 'recommended' });
+  const [adding, setAdding] = useState(false);
+  const addToast = useStore(s => s.addToast);
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const { getApiBaseUrl } = await import('../lib/auth');
+      const base = getApiBaseUrl();
+      const headers = { 'X-Admin-Session': adminSession };
+      const [gRes, rRes] = await Promise.all([
+        fetch(`${base}/api/admin/addons?type=global`, { headers }),
+        fetch(`${base}/api/admin/addons?type=recommended`, { headers }),
+      ]);
+      if (gRes.ok) setGlobalAddons((await gRes.json()).addons || []);
+      if (rRes.ok) setRecommended((await rRes.json()).addons || []);
+    } catch (e) { ERR('addons load error:', e.message); }
+    setLoading(false);
+  }, [adminSession]);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const handleAdd = async (e) => {
+    e.preventDefault();
+    if (!addForm.url.trim() || !addForm.name.trim()) return;
+    setAdding(true);
+    try {
+      const { getApiBaseUrl } = await import('../lib/auth');
+      const res = await fetch(`${getApiBaseUrl()}/api/admin/addons`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Session': adminSession },
+        body: JSON.stringify(addForm),
+      });
+      if (res.ok) {
+        addToast('Addon added to fleet orders', 'success');
+        setAddForm({ url: '', name: '', description: '', target: 'all', type: 'recommended' });
+        load();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        addToast(err.error || `Failed (${res.status})`, 'error');
+      }
+    } catch (e) { addToast(e.message, 'error'); }
+    setAdding(false);
+  };
+
+  const handleDelete = async (type, id) => {
+    try {
+      const { getApiBaseUrl } = await import('../lib/auth');
+      const res = await fetch(`${getApiBaseUrl()}/api/admin/addons`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Session': adminSession },
+        body: JSON.stringify({ type, id }),
+      });
+      if (res.ok) { addToast('Addon removed', 'success'); load(); }
+      else addToast(`Delete failed (${res.status})`, 'error');
+    } catch (e) { addToast(e.message, 'error'); }
+  };
+
   return (
     <div className="admin-view">
-      <div className="glass-panel" style={{ padding: '2rem' }}>
-        <h3>Global Fleet Addons</h3>
-        <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
-          These addons are forced on every ship in the fleet.
+      {/* Forced Global Addons */}
+      <div className="glass-panel" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
+        <h3>⚓ Fleet Orders <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 400 }}>— forced on all users</span></h3>
+        <p style={{ color: 'var(--text-secondary)', margin: '0.5rem 0 1rem', fontSize: '0.85rem' }}>
+          These are pushed to every sailor. Target controls who gets them.
         </p>
-        <div className="addon-list">
-          <div className="addon-item glass-panel">
-            <div className="addon-info">
-              <span className="addon-name">Cinemeta</span>
-              <span className="addon-url">https://v3-cinemeta.strem.io/manifest.json</span>
-            </div>
-            <span className="badge-locked">LOCKED</span>
+        {loading ? <p style={{ color: 'var(--text-muted)' }}>Loading...</p> : globalAddons.length === 0 ? (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No fleet orders configured. Add one below.</p>
+        ) : (
+          <div className="addon-list">
+            {globalAddons.map(a => (
+              <div key={a.id} className="addon-item glass-panel">
+                <div className="addon-info">
+                  <span className="addon-name">{a.name}</span>
+                  <span className="addon-url">{a.url}</span>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.7rem', padding: '2px 8px', borderRadius: '4px', background: 'rgba(255,255,255,0.08)', color: 'var(--text-secondary)' }}>
+                    {TARGET_LABELS[a.target] || a.target}
+                  </span>
+                  <button className="btn-icon" title="Delete" onClick={() => handleDelete('global', a.id)} style={{ color: 'var(--accent)' }}>✕</button>
+                </div>
+              </div>
+            ))}
           </div>
-          <div className="addon-item glass-panel">
-            <div className="addon-info">
-              <span className="addon-name">OpenSubtitles</span>
-              <span className="addon-url">https://opensubtitles-v3.strem.io/manifest.json</span>
-            </div>
-            <span className="badge-locked">LOCKED</span>
+        )}
+      </div>
+
+      {/* Recommended Addons */}
+      <div className="glass-panel" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
+        <h3>🧩 Recommended <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 400 }}>— optional, shown to users</span></h3>
+        <p style={{ color: 'var(--text-secondary)', margin: '0.5rem 0 1rem', fontSize: '0.85rem' }}>
+          Shown on the Addons page. Ultra-targeted ones are gated by tier.
+        </p>
+        {loading ? <p style={{ color: 'var(--text-muted)' }}>Loading...</p> : recommended.length === 0 ? (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No recommended addons configured.</p>
+        ) : (
+          <div className="addon-list">
+            {recommended.map(a => (
+              <div key={a.id} className="addon-item glass-panel">
+                <div className="addon-info">
+                  <span className="addon-name">{a.name} {a.target === 'ultra' && '💎'}</span>
+                  <span className="addon-url">{a.url}</span>
+                  {a.description && <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{a.description}</span>}
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.7rem', padding: '2px 8px', borderRadius: '4px', background: 'rgba(255,255,255,0.08)', color: 'var(--text-secondary)' }}>
+                    {TARGET_LABELS[a.target] || a.target}
+                  </span>
+                  <button className="btn-icon" title="Delete" onClick={() => handleDelete('recommended', a.id)} style={{ color: 'var(--accent)' }}>✕</button>
+                </div>
+              </div>
+            ))}
           </div>
-        </div>
+        )}
+      </div>
+
+      {/* Add Addon Form */}
+      <div className="glass-panel" style={{ padding: '1.5rem' }}>
+        <h3>Add Addon to Fleet</h3>
+        <form className="admin-form" style={{ marginTop: '1rem' }} onSubmit={handleAdd}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <div className="form-group">
+              <label>Type</label>
+              <select value={addForm.type} onChange={e => setAddForm(f => ({ ...f, type: e.target.value }))}>
+                <option value="global">Fleet Order (Forced)</option>
+                <option value="recommended">Recommended (Optional)</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Target</label>
+              <select value={addForm.target} onChange={e => setAddForm(f => ({ ...f, target: e.target.value }))}>
+                <option value="all">All Users</option>
+                <option value="beta">Beta Only</option>
+                <option value="ultra">Ultra Only</option>
+              </select>
+            </div>
+          </div>
+          <div className="form-group">
+            <label>Name</label>
+            <input type="text" placeholder="e.g. Torrentio" value={addForm.name}
+              onChange={e => setAddForm(f => ({ ...f, name: e.target.value }))} />
+          </div>
+          <div className="form-group">
+            <label>Manifest URL</label>
+            <input type="url" placeholder="https://torrentio.strem.fun/manifest.json" value={addForm.url}
+              onChange={e => setAddForm(f => ({ ...f, url: e.target.value }))} />
+          </div>
+          <div className="form-group">
+            <label>Description <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(optional)</span></label>
+            <input type="text" placeholder="Short description shown to users" value={addForm.description}
+              onChange={e => setAddForm(f => ({ ...f, description: e.target.value }))} />
+          </div>
+          <button type="submit" className="btn btn-gold" disabled={adding || !addForm.url.trim() || !addForm.name.trim()}>
+            {adding ? 'Adding...' : 'Add to Fleet'}
+          </button>
+        </form>
       </div>
     </div>
   );

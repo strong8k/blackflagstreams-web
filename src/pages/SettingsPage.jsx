@@ -1,123 +1,227 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useStore } from '../lib/store';
-import TorBoxPromo from '../components/TorBoxPromo';
-import { stremioLogin, stremioGetLibrary, processStremioLibrary } from '../lib/stremio';
+import ServiceCard from '../components/ServiceCard';
+import { clearAllCaches, clearStreamCache, clearImageCache } from '../lib/tmdb';
+import { getToken } from '../lib/auth';
+import { getWorkerProxyUrl } from '../lib/auth';
 import './SettingsPage.css';
+
+function ConfirmModal({ title, message, confirmWord, onConfirm, onCancel, busy }) {
+  const [typed, setTyped] = useState('');
+  const [checked, setChecked] = useState(false);
+  const needsCheckbox = confirmWord === 'DELETE';
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal-content" onClick={e => e.stopPropagation()}>
+        <h3>{title}</h3>
+        <p>{message}</p>
+        {needsCheckbox && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '0.75rem 0', fontSize: '0.85rem', cursor: 'pointer' }}>
+            <input type="checkbox" checked={checked} onChange={e => setChecked(e.target.checked)} />
+            I understand this action is permanent and cannot be undone.
+          </label>
+        )}
+        <div style={{ margin: '0.75rem 0' }}>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
+            Type <strong>{confirmWord}</strong> to confirm:
+          </p>
+          <input
+            type="text"
+            value={typed}
+            onChange={e => setTyped(e.target.value)}
+            placeholder={confirmWord}
+            autoFocus
+            style={{ width: '100%' }}
+          />
+        </div>
+        <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+          <button className="btn btn-secondary" onClick={onCancel}>Cancel</button>
+          <button
+            className="btn btn-primary"
+            style={{ background: confirmWord === 'DELETE' ? '#dc2626' : undefined }}
+            onClick={onConfirm}
+            disabled={typed !== confirmWord || (needsCheckbox && !checked) || busy}
+          >
+            {busy ? 'Working...' : confirmWord === 'DELETE' ? 'Delete Forever' : 'Reset Account'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function SettingsPage() {
   const settings = useStore(s => s.settings);
-  const setTmdbKey = useStore(s => s.setTmdbKey);
   const setCorsProxy = useStore(s => s.setCorsProxy);
   const addToast = useStore(s => s.addToast);
-  const bulkImport = useStore(s => s.bulkImport);
+  const initServices = useStore(s => s.initServices);
 
-  const [stremioEmail, setStremioEmail] = useState('');
-  const [stremioPass, setStremioPass] = useState('');
-  const [importing, setImporting] = useState(false);
+  useEffect(() => { initServices(); }, []);
 
-  const handleStremioImport = async () => {
-    if (!stremioEmail || !stremioPass) {
-      addToast('Please enter your Stremio credentials', 'warning');
-      return;
-    }
-    setImporting(true);
+  const [clearing, setClearing] = useState(false);
+  const [showReset, setShowReset] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
+  const [modalBusy, setModalBusy] = useState(false);
+
+  const handleClearCache = async (type) => {
+    setClearing(true);
+    let ok = false;
+    if (type === 'streams') ok = await clearStreamCache();
+    else if (type === 'images') ok = await clearImageCache();
+    else ok = await clearAllCaches();
+    setClearing(false);
+    if (ok) addToast(`Cache cleared: ${type}`, 'success');
+    else addToast('Cache clear failed', 'error');
+  };
+
+  const handleReset = async () => {
+    setModalBusy(true);
     try {
-      addToast('Logging into Stremio...', 'info');
-      const { authKey } = await stremioLogin(stremioEmail, stremioPass);
-      
-      addToast('Fetching your library...', 'info');
-      const library = await stremioGetLibrary(authKey);
-      
-      addToast(`Processing ${library.length} items...`, 'info');
-      const data = await processStremioLibrary(library);
-      
-      await bulkImport(data);
-      addToast(`Success! Imported ${data.watchlist.length} watchlist items and ${data.history.length} history items.`, 'success');
-      setStremioEmail('');
-      setStremioPass('');
-    } catch (err) {
-      addToast(err.message || 'Stremio import failed', 'error');
+      await clearAllCaches();
+      localStorage.clear();
+      addToast('Account reset. All local data cleared.', 'success');
+      setShowReset(false);
+      setTimeout(() => window.location.reload(), 800);
+    } catch (e) {
+      addToast('Reset failed: ' + e.message, 'error');
     } finally {
-      setImporting(false);
+      setModalBusy(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    setModalBusy(true);
+    try {
+      const token = getToken();
+      if (token) {
+        const baseUrl = localStorage.getItem('bfs_api_base') || '';
+        try {
+          await fetch(`${baseUrl}/api/auth/account`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${token}` },
+          });
+        } catch { /* backend might not have this endpoint yet */ }
+      }
+      await clearAllCaches();
+      const dbs = await indexedDB.databases();
+      for (const db of dbs) { indexedDB.deleteDatabase(db.name); }
+      localStorage.clear();
+      addToast('Account deleted. Fair winds, matey.', 'success');
+      setShowDelete(false);
+      setTimeout(() => window.location.reload(), 800);
+    } catch (e) {
+      addToast('Delete failed: ' + e.message, 'error');
+    } finally {
+      setModalBusy(false);
     }
   };
 
   return (
     <div className="page settings-page">
-      <div className="container" style={{ paddingTop: '2rem' }}>
+      <div className="container" style={{ paddingTop: '2rem', maxWidth: '900px' }}>
         <h2 className="section-title">⚙ Settings</h2>
-        
-        <div className="settings-grid">
-          {/* General Settings */}
-          <section className="settings-section">
-            <h3>General</h3>
-            <div className="settings-group">
-              <label>TMDB API Key</label>
-              <input 
-                type="text" 
-                defaultValue={settings.userTmdbKey} 
-                placeholder={settings.effectiveTmdbKey ? `Using Global: ${settings.effectiveTmdbKey.slice(0, 8)}...` : "Enter your TMDB API key"} 
-                onBlur={e => setTmdbKey(e.target.value)} 
-              />
-              <p className="setting-desc">Required for fetching movie and series metadata. Leave blank to use the global key.</p>
-            </div>
-            <div className="settings-group">
-              <label>CORS Proxy URL</label>
-              <input 
-                type="text" 
-                defaultValue={settings.userCorsProxy} 
-                placeholder={settings.effectiveCorsProxy ? `Using Global: ${settings.effectiveCorsProxy}` : "https://your-proxy.com/cors"} 
-                onBlur={e => setCorsProxy(e.target.value)} 
-              />
-              <p className="setting-desc">Used to bypass CORS restrictions. Leave blank to use the global proxy.</p>
-            </div>
-            
-            <div className="settings-group" style={{ marginTop: '2rem' }}>
-              <label>Debrid Services</label>
-              <TorBoxPromo />
-            </div>
-          </section>
 
-          {/* Import / Export */}
-          <section className="settings-section">
-            <h3>Import Data</h3>
-            <div className="settings-group stremio-import">
-              <label>Import from Stremio</label>
-              <p className="setting-desc">Connect your Stremio account to import your library and watch history.</p>
-              <div className="stremio-form">
-                <input 
-                  type="email" 
-                  placeholder="Stremio Email" 
-                  value={stremioEmail}
-                  onChange={e => setStremioEmail(e.target.value)}
-                />
-                <input 
-                  type="password" 
-                  placeholder="Stremio Password" 
-                  value={stremioPass}
-                  onChange={e => setStremioPass(e.target.value)}
-                />
-                <button 
-                  className="btn btn-gold" 
-                  onClick={handleStremioImport}
-                  disabled={importing}
-                >
-                  {importing ? 'Importing...' : '🚢 Import Library'}
-                </button>
+        {/* Connected Services */}
+        <section className="settings-section">
+          <h3>Connected Services</h3>
+          <p className="setting-desc" style={{ marginBottom: '1rem' }}>
+            Connect your streaming services for a unified experience. Tokens are stored securely on our servers.
+          </p>
+          <div className="services-grid">
+            <ServiceCard serviceKey="trakt" />
+            <ServiceCard serviceKey="stremio" />
+            <ServiceCard serviceKey="torbox" />
+            <ServiceCard serviceKey="realdebrid" />
+            <ServiceCard serviceKey="alldebrid" />
+            <ServiceCard serviceKey="rpdb" />
+          </div>
+        </section>
+
+        {/* Advanced */}
+        <section className="settings-section">
+          <h3>Advanced</h3>
+
+          {/* Custom Proxy */}
+          <div className="settings-group">
+            <label>Custom Proxy URL</label>
+            <p className="setting-desc">
+              Override the default Cloudflare proxy for API + stream requests.
+              Leave blank to use the built-in openprox proxy.
+            </p>
+            <input
+              type="text"
+              value={settings.effectiveCorsProxy !== getWorkerProxyUrl() ? settings.effectiveCorsProxy : ''}
+              onChange={(e) => {
+                setCorsProxy(e.target.value.trim());
+              }}
+              placeholder="https://your-proxy.example.com"
+            />
+            <p className="setting-desc">Default: {getWorkerProxyUrl()}</p>
+          </div>
+
+          {/* Cache Management */}
+          <div className="settings-group" style={{ marginTop: '1.25rem' }}>
+            <label>Cache Management</label>
+            <p className="setting-desc">Clear cached data to force fresh fetches.</p>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+              <button className="btn btn-secondary btn-sm" onClick={() => handleClearCache('all')} disabled={clearing}>Clear All</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => handleClearCache('streams')} disabled={clearing}>Clear Streams</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => handleClearCache('images')} disabled={clearing}>Clear Metadata</button>
+            </div>
+          </div>
+        </section>
+
+        {/* Danger Zone */}
+        <section className="settings-section" style={{ borderColor: 'rgba(220,38,38,0.2)' }}>
+          <h3 style={{ color: '#f87171' }}>Danger Zone</h3>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>Reset Account</div>
+                <p className="setting-desc">Clears all addons, cache, history, watchlist, IPTV, and settings. Fresh start.</p>
               </div>
+              <button className="btn btn-secondary" style={{ borderColor: 'rgba(234,179,8,0.4)', color: '#eab308' }} onClick={() => setShowReset(true)}>
+                Reset
+              </button>
             </div>
-          </section>
 
-          {/* Maintenance */}
-          <section className="settings-section">
-            <h3>Maintenance</h3>
-            <button className="btn btn-secondary" onClick={() => { localStorage.clear(); window.location.reload(); }}>
-              🗑 Clear All Data & Logout
-            </button>
-          </section>
-        </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>Delete Account</div>
+                <p className="setting-desc">Deletes your account and all data permanently. Logs out all devices. Cannot be undone.</p>
+              </div>
+              <button className="btn btn-secondary" style={{ borderColor: 'rgba(220,38,38,0.4)', color: '#f87171' }} onClick={() => setShowDelete(true)}>
+                Delete Forever
+              </button>
+            </div>
+          </div>
+        </section>
       </div>
 
+      {/* Modals */}
+      {showReset && (
+        <ConfirmModal
+          title="Reset Account"
+          message="This clears all your local data — addons, cache, watchlist, continue watching, IPTV providers, settings, and stored credentials. Your account will remain but all data will be wiped. You'll be logged out."
+          confirmWord="RESET"
+          onConfirm={handleReset}
+          onCancel={() => setShowReset(false)}
+          busy={modalBusy}
+        />
+      )}
+
+      {showDelete && (
+        <ConfirmModal
+          title="Delete Account"
+          message="This permanently deletes your account and ALL associated data from our servers. All devices will be logged out. Your watchlist, history, addons, IPTV configs, and profile data will be erased forever. This cannot be undone."
+          confirmWord="DELETE"
+          onConfirm={handleDelete}
+          onCancel={() => setShowDelete(false)}
+          busy={modalBusy}
+        />
+      )}
     </div>
   );
 }

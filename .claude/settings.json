@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"C:/Users/michael/AppData/Roaming/npm/node_modules/codetree-claude/dist/hook/pre-tool-use.js\""
+          }
+        ]
+      }
+    ]
+  }
+}

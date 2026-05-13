@@ -1,0 +1,154 @@
+/* ── FilterDropdown ── */
+.filter-dropdown {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  vertical-align: top;
+}
+
+.filter-dropdown-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: rgba(255,255,255,0.04);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.filter-dropdown-trigger:hover {
+  background: rgba(255,255,255,0.07);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+.filter-dropdown-trigger.has-selection {
+  border-color: var(--primary);
+  color: #fff;
+  background: rgba(233, 0, 0, 0.08);
+}
+
+/* ── Dropdown panel ── */
+.filter-dropdown-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 200px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 6px;
+  z-index: 50;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+}
+
+.filter-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  transition: background 0.1s;
+  user-select: none;
+}
+.filter-dropdown-item:hover {
+  background: rgba(255,255,255,0.06);
+  color: var(--text-primary);
+}
+.filter-dropdown-item.selected {
+  color: #fff;
+}
+
+.filter-dropdown-check {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--border-default);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.filter-dropdown-check:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.filter-dropdown-check:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 5px;
+  height: 9px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.filter-dropdown-name {
+  flex: 1;
+}
+.filter-dropdown-sub {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+.filter-dropdown-empty {
+  padding: 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+/* ── Chips ── */
+.filter-dropdown-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px 2px 8px;
+  border-radius: var(--radius-full);
+  background: rgba(233, 0, 0, 0.12);
+  border: 1px solid rgba(233, 0, 0, 0.25);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.filter-chip-x {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  cursor: pointer;
+  color: rgba(255,255,255,0.5);
+  background: none;
+  border: none;
+  padding: 0;
+  transition: all 0.12s;
+}
+.filter-chip-x:hover {
+  color: #fff;
+  background: rgba(255,255,255,0.15);
+}

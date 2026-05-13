@@ -1,0 +1,10 @@
+{
+  "enabledMcpjsonServers": [
+    "codetree"
+  ],
+  "permissions": {
+    "allow": [
+      "Bash(git stash *)"
+    ]
+  }
+}

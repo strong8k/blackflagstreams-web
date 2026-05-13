@@ -2,7 +2,12 @@
    Auth & Sync — Cloudflare Workers API
    ═══════════════════════════════════════════════════════ */
 
-const API_BASE = 'https://blackflagstream.pages.dev';
+// API base: empty string = same-origin (when frontend and backend are on the same CF Pages project)
+// Set VITE_API_BASE_URL in CF Pages env vars only when frontend and backend are on different domains.
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
+
+// openprox Worker URL — set VITE_PROXY_URL in CF Pages env vars
+const OPENPROX_BASE = import.meta.env.VITE_PROXY_URL ?? 'https://openprox.michaelrobgrove.workers.dev';
 
 const LOG = (...args) => console.log('[BFS:Auth]', ...args);
 const WARN = (...args) => console.warn('[BFS:Auth]', ...args);
@@ -11,13 +16,8 @@ const ERR = (...args) => console.error('[BFS:Auth]', ...args);
 export function getApiBaseUrl() {
   const override = localStorage.getItem('bfs_api_base');
   if (override) { LOG('Using override API base:', override); return override; }
-  const host = typeof window !== 'undefined' ? window.location.hostname : '';
-  LOG('Detected hostname:', host, '→ API base:', API_BASE);
   return API_BASE;
 }
-
-// Dedicated openprox Worker — server-to-server fetches, full CORS headers, no VPS.
-const OPENPROX_BASE = 'https://openprox.michaelrobgrove.workers.dev';
 
 export function getWorkerProxyUrl() {
   return `${OPENPROX_BASE}/proxy`;
@@ -150,6 +150,8 @@ export async function resendCode(email) {
 }
 
 // ── Admin 2FA ──
+// Returns { email } for normal OTP flow, or { session, bypassed: true } when
+// ADMIN_2FA_ENABLED=false is set on the backend — caller checks .bypassed.
 export async function requestAdminOtp(adminToken) {
   LOG('requestAdminOtp: requesting OTP...');
   const res = await fetch(`${getApiBaseUrl()}/api/admin/request-otp`, {
@@ -159,8 +161,12 @@ export async function requestAdminOtp(adminToken) {
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `OTP request failed (${res.status})`);
-  LOG('requestAdminOtp: OTP sent to admin email');
-  return data; // { email: 'a***@...' }
+  if (data.bypassed) {
+    LOG('requestAdminOtp: 2FA disabled via env — session returned directly');
+  } else {
+    LOG('requestAdminOtp: OTP sent to admin email:', data.email);
+  }
+  return data; // { email } | { session, bypassed: true }
 }
 
 export async function verifyAdminOtp(adminToken, otp) {
@@ -181,7 +187,7 @@ export async function pullSyncData() {
   if (!token) return null;
   LOG('pullSyncData: fetching...');
   try {
-    const res = await fetch(`${getApiBaseUrl()}/api/sync`, {
+    const res = await fetch(`${getApiBaseUrl()}/api/sync?action=pull&token=${encodeURIComponent(token)}`, {
       headers: { 'Authorization': `Bearer ${token}` },
     });
     if (!res.ok) { WARN('pullSyncData: status', res.status); return null; }
@@ -198,10 +204,10 @@ export function debouncedPush(data) {
     if (!token) return;
     LOG('debouncedPush: syncing...');
     try {
-      const res = await fetch(`${getApiBaseUrl()}/api/sync`, {
+      const res = await fetch(`${getApiBaseUrl()}/api/sync?action=push`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(data),
+        body: JSON.stringify({ ...data, token }),
       });
       if (!res.ok) WARN('debouncedPush: status', res.status);
       else LOG('debouncedPush: ok');
@@ -219,6 +225,39 @@ export async function submitBetaApplication(formData) {
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `Submission failed (${res.status})`);
   LOG('submitBetaApplication: ok');
+  return data;
+}
+
+// ── Device Linking ──
+export async function generateLinkCode() {
+  const token = getToken();
+  if (!token) throw new Error('Not authenticated');
+  LOG('generateLinkCode: requesting...');
+  const res = await fetch(`${getApiBaseUrl()}/api/auth/link/generate`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Link generation failed');
+  LOG('generateLinkCode:', data.code);
+  return data; // { code, expiresIn }
+}
+
+export async function approveLinkCode(code) {
+  LOG('approveLinkCode:', code);
+  const res = await fetch(`${getApiBaseUrl()}/api/auth/link/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Link approval failed');
+  if (data.token) {
+    localStorage.setItem('bfs_session', JSON.stringify({ token: data.token }));
+    localStorage.setItem('bfs_session_version', '2');
+    if (data.user) localStorage.setItem('bfs_user', JSON.stringify(data.user));
+  }
+  LOG('approveLinkCode: ok');
   return data;
 }
 

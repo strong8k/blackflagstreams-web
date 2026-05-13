@@ -35,62 +35,67 @@ export async function decryptCreds(enc) {
 
 // ── Xtream Codes API ──
 
-export async function xtreamLogin(server, username, password) {
+function proxyFetch(url, proxyUrl) {
+  if (!proxyUrl) return fetch(url);
+  return fetch(`${proxyUrl}?url=${encodeURIComponent(url)}`);
+}
+
+export async function xtreamLogin(server, username, password, proxyUrl = null) {
   const base = server.replace(/\/+$/, '');
   const url = `${base}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
-  const res = await fetch(url);
+  const res = await proxyFetch(url, proxyUrl);
   if (!res.ok) throw new Error('Invalid credentials');
   const data = await res.json();
   if (!data.user_info?.auth || data.user_info.auth === 0) throw new Error('Authentication failed');
   return { ...data, _server: base, _username: username, _password: password };
 }
 
-export async function xtreamGetLiveCategories(provider) {
+export async function xtreamGetLiveCategories(provider, proxyUrl = null) {
   const url = `${provider._server}/player_api.php?username=${encodeURIComponent(provider._username)}&password=${encodeURIComponent(provider._password)}&action=get_live_categories`;
-  const res = await fetch(url);
+  const res = await proxyFetch(url, proxyUrl);
   return res.json();
 }
 
-export async function xtreamGetLiveStreams(provider, categoryId) {
+export async function xtreamGetLiveStreams(provider, categoryId, proxyUrl = null) {
   const url = `${provider._server}/player_api.php?username=${encodeURIComponent(provider._username)}&password=${encodeURIComponent(provider._password)}&action=get_live_streams&category_id=${categoryId}`;
-  const res = await fetch(url);
+  const res = await proxyFetch(url, proxyUrl);
   return res.json();
 }
 
-export async function xtreamGetVODCategories(provider) {
+export async function xtreamGetVODCategories(provider, proxyUrl = null) {
   const url = `${provider._server}/player_api.php?username=${encodeURIComponent(provider._username)}&password=${encodeURIComponent(provider._password)}&action=get_vod_categories`;
-  const res = await fetch(url);
+  const res = await proxyFetch(url, proxyUrl);
   return res.json();
 }
 
-export async function xtreamGetVODStreams(provider, categoryId) {
+export async function xtreamGetVODStreams(provider, categoryId, proxyUrl = null) {
   const url = `${provider._server}/player_api.php?username=${encodeURIComponent(provider._username)}&password=${encodeURIComponent(provider._password)}&action=get_vod_streams&category_id=${categoryId}`;
-  const res = await fetch(url);
+  const res = await proxyFetch(url, proxyUrl);
   return res.json();
 }
 
-export async function xtreamGetSeriesCategories(provider) {
+export async function xtreamGetSeriesCategories(provider, proxyUrl = null) {
   const url = `${provider._server}/player_api.php?username=${encodeURIComponent(provider._username)}&password=${encodeURIComponent(provider._password)}&action=get_series_categories`;
-  const res = await fetch(url);
+  const res = await proxyFetch(url, proxyUrl);
   return res.json();
 }
 
-export async function xtreamGetSeries(provider, categoryId) {
+export async function xtreamGetSeries(provider, categoryId, proxyUrl = null) {
   const url = `${provider._server}/player_api.php?username=${encodeURIComponent(provider._username)}&password=${encodeURIComponent(provider._password)}&action=get_series&category_id=${categoryId}`;
-  const res = await fetch(url);
+  const res = await proxyFetch(url, proxyUrl);
   return res.json();
 }
 
-export async function xtreamGetSeriesInfo(provider, seriesId) {
+export async function xtreamGetSeriesInfo(provider, seriesId, proxyUrl = null) {
   const url = `${provider._server}/player_api.php?username=${encodeURIComponent(provider._username)}&password=${encodeURIComponent(provider._password)}&action=get_series_info&series_id=${seriesId}`;
-  const res = await fetch(url);
+  const res = await proxyFetch(url, proxyUrl);
   return res.json();
 }
 
-export async function xtreamGetEPG(provider, streamId, limit = 4) {
+export async function xtreamGetEPG(provider, streamId, limit = 4, proxyUrl = null) {
   const url = `${provider._server}/player_api.php?username=${encodeURIComponent(provider._username)}&password=${encodeURIComponent(provider._password)}&action=get_short_epg&stream_id=${streamId}&limit=${limit}`;
   try {
-    const res = await fetch(url);
+    const res = await proxyFetch(url, proxyUrl);
     return res.json();
   } catch { return { epg_listings: [] }; }
 }

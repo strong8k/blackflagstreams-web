@@ -25,6 +25,7 @@ export default function OnboardingPage() {
   const addAddon = useStore(s => s.addAddon);
   const fetchManifest = useStore(s => s.fetchManifest);
   const addIPTVProvider = useStore(s => s.addIPTVProvider);
+  const serverRecommended = useStore(s => s.recommendedAddons);
 
   // Steps: 1: Plan, 2: Account, 3: Verify, 4: Payment, 5: Profile, 6: Addons, 7: IPTV
   const [step, setStep] = useState(1);
@@ -193,6 +194,7 @@ export default function OnboardingPage() {
         });
       }
 
+      localStorage.setItem('bfs_onboarded', '1');
       addToast('Welcome aboard!', 'success');
       navigate('/');
     } catch (err) {
@@ -303,7 +305,7 @@ export default function OnboardingPage() {
               <div className="addons-section">
                 <h4>Recommended Addons</h4>
                 <div className="addon-onboarding-grid">
-                  {RECOMMENDED_ADDONS.map(addon => (
+                  {serverRecommended.map(addon => (
                     <div key={addon.transportUrl} className={`addon-onboarding-card${selectedAddons.includes(addon.transportUrl) ? ' active' : ''}`} onClick={() => toggleAddon(addon.transportUrl)}>
                       <div className="addon-check">{selectedAddons.includes(addon.transportUrl) ? '✓' : ''}</div>
                       <h3>{addon.name}</h3>
@@ -329,7 +331,7 @@ export default function OnboardingPage() {
               </div>
 
               <div className="onboarding-actions">
-                <button className="btn btn-secondary" onClick={() => setStep(5)}>Back</button>
+                <button className="btn btn-secondary" onClick={() => setStep(selectedTier?.id === 'free' ? 1 : 5)}>Back</button>
                 <button className="btn btn-gold" onClick={handleFinishAddons}>Continue ❯</button>
               </div>
             </motion.div>

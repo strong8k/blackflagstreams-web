@@ -40,21 +40,16 @@ export {
   enqueueTraktPush,
 } from './trakt';
 
-// ═══ Stremio (Syncio-style device pairing) ═══
+// ═══ Stremio (email/password auth) ═══
 
-export async function getStremioAuthCode() {
-  LOG('Requesting Stremio pairing code...');
-  const data = await api('/api/stremio/auth', { method: 'POST' });
-  LOG('Got Stremio pairing code:', data.code);
-  return data; // { code, link }
-}
-
-export async function pollStremioAuth(code) {
-  const data = await api('/api/stremio/poll', {
+export async function connectStremio(email, password) {
+  LOG('Connecting Stremio...');
+  const data = await api('/api/stremio/auth', {
     method: 'POST',
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ email, password }),
   });
-  return data; // { done, authKey? }
+  LOG('Stremio connected:', data.email);
+  return data; // { connected, email }
 }
 
 export async function getStremioStatus() {
@@ -101,21 +96,16 @@ export async function disconnectTorBox() {
   return data;
 }
 
-// ═══ Real-Debrid (OAuth2 device flow) ═══
+// ═══ Real-Debrid (API key) ═══
 
-export async function getRDAuthCode() {
-  LOG('Requesting Real-Debrid device code...');
-  const data = await api('/api/realdebrid/auth', { method: 'POST' });
-  LOG('Got RD device code');
-  return data; // { device_code, user_code, verification_url, interval }
-}
-
-export async function pollRDAuth(deviceCode) {
-  const data = await api('/api/realdebrid/poll', {
+export async function connectRD(apiKey) {
+  LOG('Connecting Real-Debrid...');
+  const data = await api('/api/realdebrid/auth', {
     method: 'POST',
-    body: JSON.stringify({ device_code: deviceCode }),
+    body: JSON.stringify({ apiKey }),
   });
-  return data; // { done }
+  LOG('Real-Debrid connected:', data.username);
+  return data; // { connected, username, premium, expiresAt }
 }
 
 export async function getRDStatus() {

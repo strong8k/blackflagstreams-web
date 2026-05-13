@@ -1,5 +1,5 @@
 import React, { useEffect, useState, Suspense, lazy } from 'react';
-import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import Sidebar from './components/Sidebar';
 import Toasts from './components/Toasts';
@@ -23,12 +23,14 @@ const IPTVSetupPage  = lazy(() => import('./pages/IPTVSetupPage'));
 const UpgradePage   = lazy(() => import('./pages/UpgradePage'));
 const OnboardingPage = lazy(() => import('./pages/OnboardingPage'));
 const LandingPage   = lazy(() => import('./pages/LandingPage'));
+const LoginPage     = lazy(() => import('./pages/LoginPage'));
 const AdminPage     = lazy(() => import('./pages/AdminPage'));
 const BetaTesterPage = lazy(() => import('./pages/BetaTesterPage'));
 const LegalPage     = lazy(() => import('./pages/LegalPage'));
 const NotFoundPage  = lazy(() => import('./pages/NotFoundPage'));
 const TorBoxPage    = lazy(() => import('./pages/TorBoxPage'));
 const ProfilePickerPage = lazy(() => import('./pages/ProfilePickerPage'));
+const DeviceLinkPage = lazy(() => import('./pages/DeviceLinkPage'));
 
 const pageVariants = {
   initial: { opacity: 0, y: 8 },
@@ -58,8 +60,10 @@ function PageWrapper({ children }) {
 
 function AppShell() {
   const location = useLocation();
+  const navigate = useNavigate();
   const isPlayer = location.pathname === '/player';
-  const isAdmin  = location.pathname === '/xbf-ops-9a2c';
+  const isAdmin   = location.pathname === '/xbf-ops-9a2c';
+  const isLanding = location.pathname === '/' && !localStorage.getItem('bfs_onboarded') && !localStorage.getItem('bfs_session');
 
   const [configReady, setConfigReady] = useState(
     !!(localStorage.getItem('bfs_tmdb_key') || localStorage.getItem('bfs_user_tmdb_key'))
@@ -88,12 +92,12 @@ function AppShell() {
     initAuth();
   }, []);
 
-  // Link code for QR auth
+  // Link code for QR auth — TV device pairing
   const linkCode = new URLSearchParams(location.search).get('link');
   if (linkCode) {
     return (
       <Suspense fallback={<div className="app-boot-screen"><span className="logo">☠️</span><div className="spinner" /></div>}>
-        <PageWrapper>QR Auth</PageWrapper>
+        <DeviceLinkPage code={linkCode} />
       </Suspense>
     );
   }
@@ -110,12 +114,12 @@ function AppShell() {
 
   return (
     <div className="app-shell">
-      {!isPlayer && !isAdmin && <Sidebar />}
+      {!isPlayer && !isAdmin && !isLanding && <Sidebar />}
       <main className={`main-content${isPlayer ? ' player-active' : ''}`}>
         <Suspense fallback={<div className="app-boot-screen"><div className="spinner" /></div>}>
           <AnimatePresence mode="wait" initial={false}>
             <Routes location={location} key={location.pathname}>
-              <Route path="/" element={<PageWrapper><HomePage /></PageWrapper>} />
+              <Route path="/" element={<PageWrapper>{isLanding ? <LandingPage onStart={(mode) => { if (mode === "register") navigate("/onboarding"); else navigate("/login"); }} onSignIn={() => navigate("/login")} /> : <HomePage />}</PageWrapper>} />
               <Route path="/movies" element={<PageWrapper><MoviesPage /></PageWrapper>} />
               <Route path="/series" element={<PageWrapper><SeriesPage /></PageWrapper>} />
               <Route path="/search" element={<PageWrapper><SearchPage /></PageWrapper>} />
@@ -130,6 +134,7 @@ function AppShell() {
               <Route path="/iptv/setup" element={<PageWrapper><IPTVSetupPage /></PageWrapper>} />
               <Route path="/upgrade" element={<PageWrapper><UpgradePage /></PageWrapper>} />
               <Route path="/onboarding" element={<PageWrapper><OnboardingPage /></PageWrapper>} />
+              <Route path="/login" element={<PageWrapper><LoginPage /></PageWrapper>} />
               <Route path="/profiles" element={<PageWrapper><ProfilePickerPage /></PageWrapper>} />
               <Route path="/xbf-ops-9a2c" element={<PageWrapper><AdminPage /></PageWrapper>} />
               <Route path="/beta" element={<PageWrapper><BetaTesterPage /></PageWrapper>} />
