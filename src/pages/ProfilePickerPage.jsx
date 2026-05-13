@@ -22,8 +22,8 @@ export default function ProfilePickerPage() {
   };
   const profileLimit = auth?.tierLimits?.profiles || tierLimits[auth?.tier || 'free'] || 1;
 
-  const handleSelect = async (id) => {
-    await setActiveProfile(id);
+  const handleSelect = async (profile) => {
+    await setActiveProfile(profile);
     navigate('/');
   };
 
@@ -61,7 +61,7 @@ export default function ProfilePickerPage() {
               initial={{ opacity: 0, scale: 0.8 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ delay: idx * 0.1 }}
-              onClick={() => handleSelect(profile.id)}
+              onClick={() => handleSelect(profile)}
             >
               <div className="profile-avatar" style={{ background: profile.color || '#c41a1a' }}>
                 {profile.avatar || '🏴‍☠️'}

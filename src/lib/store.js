@@ -5,7 +5,7 @@
 import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import { nanoid } from 'nanoid';
-import { getWorkerProxyUrl, getApiBaseUrl } from './auth';
+import { getWorkerProxyUrl, getApiBaseUrl, checkSession, getToken, getStoredUser } from './auth';
 
 // ── Helpers ──
 
@@ -226,30 +226,28 @@ const useStore = create(
         },
 
         // ── UI State ──
-        ui: {
-          searchQuery: '',
-          setSearchQuery: (q) => set((s) => ({ ui: { ...s.ui, searchQuery: q } })),
-          detailModal: null,
-          setDetailModal: (id) => set((s) => ({ ui: { ...s.ui, detailModal: id } })),
-          playerOpen: false,
-          playerItem: null,
-          openPlayer: (item) => set((s) => ({ ui: { ...s.ui, playerOpen: true, playerItem: item } })),
-          closePlayer: () => set((s) => ({ ui: { ...s.ui, playerOpen: false, playerItem: null } })),
-          toasts: [],
-          addToast: (msg, type = 'info') => {
-            const id = nanoid(8);
-            set((s) => ({ ui: { ...s.ui, toasts: [...s.ui.toasts, { id, msg, type }] } }));
-            setTimeout(() => {
-              set((s) => ({
-                ui: { ...s.ui, toasts: s.ui.toasts.filter((t) => t.id !== id) },
-              }));
-            }, 4000);
-          },
-          removeToast: (id) =>
+        searchQuery: '',
+        setSearchQuery: (q) => set({ searchQuery: q }),
+        detailModal: null,
+        setDetailModal: (id) => set({ detailModal: id }),
+        playerOpen: false,
+        playerItem: null,
+        openPlayer: (item) => set({ playerOpen: true, playerItem: item }),
+        closePlayer: () => set({ playerOpen: false, playerItem: null }),
+        toasts: [],
+        addToast: (msg, type = 'info') => {
+          const id = nanoid(8);
+          set((s) => ({ toasts: [...(s.toasts || []), { id, msg, type }] }));
+          setTimeout(() => {
             set((s) => ({
-              ui: { ...s.ui, toasts: s.ui.toasts.filter((t) => t.id !== id) },
-            })),
+              toasts: (s.toasts || []).filter((t) => t.id !== id),
+            }));
+          }, 4000);
         },
+        removeToast: (id) =>
+          set((s) => ({
+            toasts: (s.toasts || []).filter((t) => t.id !== id),
+          })),
 
         // ── TMDB Data ──
         tmdb: {
@@ -489,6 +487,39 @@ const useStore = create(
           // IPTV providers are persisted via Zustand persist
         },
 
+        // ── Auth Init (called from App on mount) ──
+        initAuth: async () => {
+          const data = await checkSession();
+          if (data?.user) {
+            const token = getToken();
+            set((s) => ({
+              auth: {
+                ...s.auth,
+                loggedIn: true,
+                user: data.user,
+                token,
+                tier: data.user?.tier || 'free',
+              },
+            }));
+            if (data.user) localStorage.setItem('bfs_user', JSON.stringify(data.user));
+          } else {
+            // Fallback: check for a stored user without server validation
+            const storedUser = getStoredUser();
+            const token = getToken();
+            if (storedUser && token) {
+              set((s) => ({
+                auth: {
+                  ...s.auth,
+                  loggedIn: true,
+                  user: storedUser,
+                  token,
+                  tier: storedUser?.tier || 'free',
+                },
+              }));
+            }
+          }
+        },
+
         // ── Reset full state ──
         resetState: () =>
           set(
@@ -509,7 +540,8 @@ const useStore = create(
               history: [],
               addons: [],
               iptvProviders: [],
-              ui: { ...get().ui, toasts: [], searchQuery: '' },
+              toasts: [],
+              searchQuery: '',
             },
             true
           ),
