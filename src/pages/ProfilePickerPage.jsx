@@ -6,10 +6,21 @@ import { useStore } from '../lib/store';
 export default function ProfilePickerPage() {
   const navigate = useNavigate();
   const profiles = useStore(s => s.profiles);
-  const activeProfileId = useStore(s => s.activeProfile);
+  const activeProfile = useStore(s => s.activeProfile);
   const setActiveProfile = useStore(s => s.setActiveProfile);
   const addProfile = useStore(s => s.addProfile);
   const auth = useStore(s => s.auth);
+
+  const activeProfileId = activeProfile?.id;
+
+  const tierLimits = {
+    free: 1,
+    account: 2,
+    premium: 4,
+    pro: 6,
+    ultra: 10,
+  };
+  const profileLimit = auth?.tierLimits?.profiles || tierLimits[auth?.tier || 'free'] || 1;
 
   const handleSelect = async (id) => {
     await setActiveProfile(id);
@@ -20,7 +31,11 @@ export default function ProfilePickerPage() {
     try {
       const name = prompt('Enter pirate name:');
       if (name) {
-        addProfile({ name });
+        const AVATARS = ['🏴‍☠️', '👤', '⚓', '⚔️', '🐙', '🧭', '🪙', '💀'];
+        const COLORS = ['#e90000', '#f0c040', '#2dd48a', '#4a9eff', '#8a4aff', '#ff4ab3', '#ffffff'];
+        const avatar = AVATARS[Math.floor(Math.random() * AVATARS.length)];
+        const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+        addProfile({ name, avatar, color });
       }
     } catch (err) {
       alert(err.message);
@@ -30,7 +45,7 @@ export default function ProfilePickerPage() {
   return (
     <div className="page profile-picker-page">
       <div className="profile-container">
-        <motion.h1 
+        <motion.h1
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           style={{ marginBottom: '3rem', textAlign: 'center' }}
@@ -56,7 +71,7 @@ export default function ProfilePickerPage() {
             </motion.div>
           ))}
 
-          {profiles.length < (auth.tierLimits?.profiles || 1) && (
+          {profiles.length < profileLimit && (
             <motion.div
               className="profile-card add-profile"
               initial={{ opacity: 0, scale: 0.8 }}
@@ -119,7 +134,7 @@ export default function ProfilePickerPage() {
         .profile-name { font-size: 1.1rem; font-weight: 500; color: var(--text-muted); transition: color 0.3s; }
         .profile-card:hover .profile-name { color: white; }
         .profile-badge { font-size: 0.7rem; color: var(--primary); text-transform: uppercase; margin-top: 0.5rem; font-weight: 700; }
-        
+
         .add-profile .profile-avatar { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.3); font-size: 2.5rem; }
         .add-profile:hover .profile-avatar { color: white; border-color: rgba(255,255,255,0.2); }
       `}</style>

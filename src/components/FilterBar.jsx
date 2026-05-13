@@ -63,7 +63,6 @@ export default function FilterBar({ type, filters, onFilterChange }) {
   }, [genreIds, filters, onFilterChange]);
 
   const handleRating = useCallback((id, add) => {
-    // Single-select
     if (!add || id === 0) {
       onFilterChange({ ...filters, minRating: 0 });
     } else {
@@ -105,6 +104,13 @@ export default function FilterBar({ type, filters, onFilterChange }) {
   const ratingSelected = minRating > 0 ? new Set([minRating]) : new Set();
   const decadeSelected = decade ? new Set([decade]) : new Set();
 
+  // Build a genre lookup map for O(1) access instead of .find() per render
+  const genreMap = useMemo(() => {
+    const map = new Map();
+    genres.forEach(g => map.set(g.id, g.name));
+    return map;
+  }, [genres]);
+
   return (
     <div className="filter-bar">
       <div className="filter-bar-row">
@@ -113,7 +119,7 @@ export default function FilterBar({ type, filters, onFilterChange }) {
           options={genres}
           selected={new Set(genreIds)}
           onChange={handleGenre}
-          renderName={(id) => genres.find(g => g.id === id)?.name || id}
+          renderName={(id) => genreMap.get(id) || id}
         />
 
         <FilterDropdown

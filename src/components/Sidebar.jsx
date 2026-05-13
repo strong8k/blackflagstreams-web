@@ -43,11 +43,9 @@ const TIER_LABELS = {
 };
 
 export default function Sidebar() {
-  const activeProfileId = useStore(s => s.activeProfile);
-  const profiles = useStore(s => s.profiles);
+  const activeProfile = useStore(s => s.activeProfile);
   const tier = useStore(s => s.auth.tier);
   const authLoggedIn = useStore(s => s.auth.loggedIn);
-  const activeProfile = profiles.find(p => p.id === activeProfileId);
   const tierLabel = TIER_LABELS[tier] || 'Landlubber';
 
   const [expanded, setExpanded] = useState(false);
@@ -151,7 +149,7 @@ export default function Sidebar() {
               <Link to="/beta">Beta</Link>
             </div>
             <div className="sidebar-copyright">
-              &copy; 2026 BlackFlagStreams
+              © 2026 BlackFlagStreams
             </div>
           </div>
         </div>

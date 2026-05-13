@@ -6,11 +6,6 @@ import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import { nanoid } from 'nanoid';
 import { getWorkerProxyUrl, getApiBaseUrl } from './auth';
-import { getFaviconUrl } from './tmdb';
-import { fetchAddonManifests, fetchStremioCatalog, fetchStremioStreams } from './addons';
-import { syncTraktWatchlist, syncTraktHistory, traktScrobble } from './trakt';
-import { fetchAllDebridMagnetLink, fetchAllDebridCachedLinks } from './services';
-import { fetchRPDB } from './services';
 
 // ── Helpers ──
 
@@ -30,6 +25,13 @@ function getInitialSettings() {
   };
 }
 
+// ── Profile presets ──
+
+const DEFAULT_PROFILES = [
+  { id: 1, name: 'Adult', avatar: '👤', color: '#3b82f6' },
+  { id: 2, name: 'Kids', avatar: '🧒', color: '#10b981' },
+];
+
 // ── Store ──
 
 const useStore = create(
@@ -44,13 +46,14 @@ const useStore = create(
           qrCode: null,
           deviceCode: null,
           assignedAddons: [],
+          tier: 'free',
           setAuth: (user, token) =>
             set((s) => ({
-              auth: { ...s.auth, loggedIn: true, user, token },
+              auth: { ...s.auth, loggedIn: true, user, token, tier: user?.tier || 'free' },
             })),
           clearAuth: () =>
             set((s) => ({
-              auth: { ...s.auth, loggedIn: false, user: null, token: null },
+              auth: { ...s.auth, loggedIn: false, user: null, token: null, tier: 'free' },
               services: Object.fromEntries(
                 Object.keys(s.services).map((k) => [k, { connected: false }])
               ),
@@ -64,6 +67,33 @@ const useStore = create(
               auth: { ...s.auth, assignedAddons: addons },
             })),
         },
+
+        // ── Profiles ──
+        profiles: DEFAULT_PROFILES,
+        activeProfile: DEFAULT_PROFILES[0],
+        setActiveProfile: (profile) =>
+          set((s) => {
+            const p = typeof profile === 'function' ? profile(s.profiles, s.activeProfile) : profile;
+            if (p) localStorage.setItem('bfs_active_profile', JSON.stringify(p));
+            return { activeProfile: p };
+          }),
+        addProfile: (data) =>
+          set((s) => {
+            const id = s.profiles.length > 0 ? Math.max(...s.profiles.map((p) => p.id)) + 1 : 1;
+            const newProfile = { ...data, id };
+            return { profiles: [...s.profiles, newProfile] };
+          }),
+        updateProfile: (id, data) =>
+          set((s) => ({
+            profiles: s.profiles.map((p) => (p.id === id ? { ...p, ...data } : p)),
+            activeProfile: s.activeProfile?.id === id ? { ...s.activeProfile, ...data } : s.activeProfile,
+          })),
+        removeProfile: (id) =>
+          set((s) => {
+            const next = s.profiles.filter((p) => p.id !== id);
+            const newActive = next.find((p) => p.id === s.activeProfile?.id) || next[0] || null;
+            return { profiles: next, activeProfile: newActive };
+          }),
 
         // ── Config ──
         config: {},
@@ -122,17 +152,51 @@ const useStore = create(
             services: { ...s.services, [key]: { ...s.services[key], ...data } },
           })),
 
-        // Connect a service — sets connected flag and any provided info
         connectService: (key, info = {}) =>
           set((s) => ({
             services: { ...s.services, [key]: { ...s.services[key], connected: true, ...info } },
           })),
 
-        // Disconnect a service — resets to disconnected state
         disconnectService: (key) =>
           set((s) => ({
             services: { ...s.services, [key]: { connected: false, username: null, plan: null, expiresAt: null, tier: null } },
           })),
+
+        // Initialize all services from stored credentials (run once on app start)
+        initServices: async () => {
+          const state = get();
+          const baseUrl = getApiBaseUrl() || '';
+          const token = state.auth?.token;
+          if (!token) return;
+          const svcKeys = [
+            { key: 'trakt', path: 'trakt' },
+            { key: 'stremio', path: 'stremio' },
+            { key: 'torbox', path: 'torbox' },
+            { key: 'realdebrid', path: 'realdebrid' },
+            { key: 'alldebrid', path: 'alldebrid' },
+            { key: 'rpdb', path: 'rpdb' },
+          ];
+          for (const { key, path } of svcKeys) {
+            try {
+              const res = await fetch(`${baseUrl}/api/${path}/status`, {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              if (res.ok) {
+                const data = await res.json();
+                if (data.connected) {
+                  const update = { connected: true };
+                  if (data.username) update.username = data.username;
+                  if (data.email) update.email = data.email;
+                  if (data.plan) update.plan = data.plan;
+                  if (data.premium !== undefined) update.premium = data.premium;
+                  if (data.tier) update.tier = data.tier;
+                  if (data.expiresAt) update.expiresAt = data.expiresAt;
+                  set((s) => ({ services: { ...s.services, [key]: { ...s.services[key], ...update } } }));
+                }
+              }
+            } catch { /* skip */ }
+          }
+        },
 
         // ── TMDB Key (legacy setter kept for compatibility) ──
         setTmdbKey: (k) => {
@@ -207,12 +271,21 @@ const useStore = create(
         watchlist: [],
         addToWatchlist: (item) =>
           set((s) => ({ watchlist: [...s.watchlist, item] })),
-        removeFromWatchlist: (id) =>
-          set((s) => ({ watchlist: s.watchlist.filter((i) => i.id !== id) })),
+        removeFromWatchlist: (id, type) =>
+          set((s) => ({
+            watchlist: s.watchlist.filter((i) => !(i.id === id && (!type || i.type === type))),
+          })),
+        isInWatchlist: (id, type) => {
+          const state = get();
+          return (state.watchlist || []).some((i) => i.id === id && (!type || i.type === type));
+        },
         loadWatchlist: () => {
           try {
             const raw = localStorage.getItem('bfs_watchlist');
-            if (raw) set((s) => ({ watchlist: JSON.parse(raw) }));
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) set((s) => ({ watchlist: parsed }));
+            }
           } catch {}
         },
 
@@ -227,6 +300,17 @@ const useStore = create(
           set((s) => ({
             continueWatching: s.continueWatching.filter((i) => i.id !== id),
           })),
+        getProgress: (id, type) => {
+          const state = get();
+          const cw = (state.continueWatching || []).find(
+            (i) => i.id === id && (!type || i.type === type)
+          );
+          if (cw && cw.progress !== undefined) return cw;
+          const hist = (state.history || []).find(
+            (i) => i.id === id && (!type || i.type === type)
+          );
+          return hist || null;
+        },
 
         // ── History ──
         history: [],
@@ -259,6 +343,38 @@ const useStore = create(
           set((s) => ({
             addons: s.addons.map((a) => (a.url === url ? { ...a, ...data } : a)),
           })),
+        removeAddon: (url) =>
+          set((s) => ({
+            addons: s.addons.filter((a) => a.url !== url),
+          })),
+        addAddon: (url) =>
+          set((s) => {
+            if (s.addons.some((a) => a.url === url)) return {};
+            return { addons: [...s.addons, { url, enabled: true, manifest: null }] };
+          }),
+
+        // ── Fetch addon manifest and add to list ──
+        fetchManifest: async (transportUrl) => {
+          try {
+            const { fetchManifest } = await import('../lib/addons');
+            const manifest = await fetchManifest(transportUrl);
+            set((s) => {
+              if (s.addons.some((a) => a.url === transportUrl)) return {};
+              return {
+                addons: [...s.addons, {
+                  url: transportUrl,
+                  enabled: true,
+                  manifest,
+                  transportUrl,
+                }],
+              };
+            });
+            return manifest;
+          } catch (e) {
+            get().addToast?.(`Failed to fetch manifest: ${e.message}`, 'error');
+            return null;
+          }
+        },
 
         // ── IPTV ──
         iptvProviders: [],
@@ -276,7 +392,6 @@ const useStore = create(
             const token = state?.auth?.token;
             const providers = state.iptvProviders;
             if (!token) throw new Error('Not authenticated');
-            // Fix: Use the app's own API base URL, NOT the CORS proxy
             const baseUrl = getApiBaseUrl() || '';
             const res = await fetch(`${baseUrl}/api/sync`, {
               method: 'POST',
@@ -378,7 +493,9 @@ const useStore = create(
         resetState: () =>
           set(
             {
-              auth: { loggedIn: false, user: null, token: null, qrCode: null, deviceCode: null, assignedAddons: [] },
+              auth: { loggedIn: false, user: null, token: null, qrCode: null, deviceCode: null, assignedAddons: [], tier: 'free' },
+              profiles: DEFAULT_PROFILES,
+              activeProfile: DEFAULT_PROFILES[0],
               services: {
                 trakt: { connected: false, username: null, lastSync: null, autoSync: false },
                 stremio: { connected: false, username: null, lastImport: null },
@@ -400,7 +517,9 @@ const useStore = create(
       {
         name: 'bfs-storage',
         partialize: (state) => ({
-          auth: { loggedIn: state.auth.loggedIn, user: state.auth.user, token: state.auth.token },
+          auth: { loggedIn: state.auth.loggedIn, user: state.auth.user, token: state.auth.token, tier: state.auth.tier },
+          profiles: state.profiles,
+          activeProfile: state.activeProfile,
           settings: state.settings,
           services: state.services,
           addons: state.addons,
@@ -414,4 +533,5 @@ const useStore = create(
   )
 );
 
+export { useStore };
 export default useStore;

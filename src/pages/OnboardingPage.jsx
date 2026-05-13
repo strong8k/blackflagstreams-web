@@ -20,7 +20,7 @@ export default function OnboardingPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const addToast = useStore(s => s.addToast);
-  const createFirstProfile = useStore(s => s.createFirstProfile);
+  const addProfile = useStore(s => s.addProfile);
   const setActiveProfile = useStore(s => s.setActiveProfile);
   const addAddon = useStore(s => s.addAddon);
   const fetchManifest = useStore(s => s.fetchManifest);
@@ -30,7 +30,7 @@ export default function OnboardingPage() {
   // Steps: 1: Plan, 2: Account, 3: Verify, 4: Payment, 5: Profile, 6: Addons, 7: IPTV
   const [step, setStep] = useState(1);
   const [selectedTier, setSelectedTier] = useState(null);
-  
+
   // Account State
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -138,9 +138,11 @@ export default function OnboardingPage() {
     setLoading(true);
     try {
       const manifest = await fetchManifest(customAddonUrl);
-      setCustomAddons([...customAddons, manifest]);
-      setCustomAddonUrl('');
-      addToast(`Added ${manifest.name}`, 'success');
+      if (manifest) {
+        setCustomAddons([...customAddons, manifest]);
+        setCustomAddonUrl('');
+        addToast(`Added ${manifest.name}`, 'success');
+      }
     } catch (e) {
       addToast('Invalid addon URL', 'error');
     } finally {
@@ -170,8 +172,10 @@ export default function OnboardingPage() {
         finalColor = '#e90000';
       }
 
-      const profile = createFirstProfile({ name: finalName, avatar: finalAvatar, color: finalColor });
-      await setActiveProfile(profile.id);
+      // Note: profile creation now happens at account registration time
+      // We just set the active profile name here for display purposes
+      const profileId = selectedTier?.id === 'free' ? 'guest' : email;
+      await setActiveProfile({ id: profileId, name: finalName, avatar: finalAvatar, color: finalColor });
 
       // 2. Install Addons
       // Recommended ones
@@ -208,7 +212,7 @@ export default function OnboardingPage() {
     <div className="onboarding-page">
       <div className="onboarding-container">
         <AnimatePresence mode="wait">
-          
+
           {/* STEP 1: PLAN SELECTION */}
           {step === 1 && (
             <motion.div key="step1" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="onboarding-step plan-step">
@@ -301,7 +305,7 @@ export default function OnboardingPage() {
               <div className="onboarding-icon">🧩</div>
               <h2>Stock Your Armory</h2>
               <p>Default addons are protected. Add more to find more streams.</p>
-              
+
               <div className="addons-section">
                 <h4>Recommended Addons</h4>
                 <div className="addon-onboarding-grid">
@@ -325,7 +329,7 @@ export default function OnboardingPage() {
                   </div>
                 )}
                 <p className="limit-text">
-                  {selectedTier.id === 'free' ? `Guest limit: ${customAddons.length} / 5` : 'Unlimited custom addons'}
+                  {selectedTier?.id === 'free' ? `Guest limit: ${customAddons.length} / 5` : 'Unlimited custom addons'}
                 </p>
                 <a href="https://stremio-addons.net/" target="_blank" rel="noreferrer" className="btn btn-link">🔍 Discover More Addons</a>
               </div>
