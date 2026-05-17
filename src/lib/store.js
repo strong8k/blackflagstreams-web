@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import { nanoid } from 'nanoid';
 import { getWorkerProxyUrl, getApiBaseUrl, checkSession, getToken, getStoredUser } from './auth';
+import { log, setLogUser } from './logger';
 
 // ── Helpers ──
 
@@ -51,13 +52,15 @@ const useStore = create(
             set((s) => ({
               auth: { ...s.auth, loggedIn: true, user, token, tier: user?.tier || 'free' },
             })),
-          clearAuth: () =>
+          clearAuth: () => {
+            log('info', 'auth logout');
             set((s) => ({
               auth: { ...s.auth, loggedIn: false, user: null, token: null, tier: 'free' },
               services: Object.fromEntries(
                 Object.keys(s.services).map((k) => [k, { connected: false }])
               ),
-            })),
+            }));
+          },
           setQrDevice: (qrCode, deviceCode) =>
             set((s) => ({
               auth: { ...s.auth, qrCode, deviceCode },
@@ -152,15 +155,19 @@ const useStore = create(
             services: { ...s.services, [key]: { ...s.services[key], ...data } },
           })),
 
-        connectService: (key, info = {}) =>
+        connectService: (key, info = {}) => {
+          log('info', `service connect: ${key}`, { username: info.username || info.email || null });
           set((s) => ({
             services: { ...s.services, [key]: { ...s.services[key], connected: true, ...info } },
-          })),
+          }));
+        },
 
-        disconnectService: (key) =>
+        disconnectService: (key) => {
+          log('info', `service disconnect: ${key}`);
           set((s) => ({
             services: { ...s.services, [key]: { connected: false, username: null, plan: null, expiresAt: null, tier: null } },
-          })),
+          }));
+        },
 
         // Initialize all services from stored credentials (run once on app start)
         initServices: async () => {
@@ -191,10 +198,14 @@ const useStore = create(
                   if (data.premium !== undefined) update.premium = data.premium;
                   if (data.tier) update.tier = data.tier;
                   if (data.expiresAt) update.expiresAt = data.expiresAt;
+                  if (data.apiKey) update.apiKey = data.apiKey;
                   set((s) => ({ services: { ...s.services, [key]: { ...s.services[key], ...update } } }));
+                  log('info', `service ready: ${key}`, { username: data.username || data.email || null });
+                } else {
+                  log('debug', `service not connected: ${key}`);
                 }
               }
-            } catch { /* skip */ }
+            } catch (e) { log('warn', `service status error: ${key}`, e.message); }
           }
         },
 
@@ -267,12 +278,16 @@ const useStore = create(
 
         // ── Watchlist ──
         watchlist: [],
-        addToWatchlist: (item) =>
-          set((s) => ({ watchlist: [...s.watchlist, item] })),
-        removeFromWatchlist: (id, type) =>
+        addToWatchlist: (item) => {
+          log('info', 'watchlist add', { id: item.id, type: item.type, title: item.title });
+          set((s) => ({ watchlist: [...s.watchlist, item] }));
+        },
+        removeFromWatchlist: (id, type) => {
+          log('info', 'watchlist remove', { id, type });
           set((s) => ({
             watchlist: s.watchlist.filter((i) => !(i.id === id && (!type || i.type === type))),
-          })),
+          }));
+        },
         isInWatchlist: (id, type) => {
           const state = get();
           return (state.watchlist || []).some((i) => i.id === id && (!type || i.type === type));
@@ -310,6 +325,10 @@ const useStore = create(
           return hist || null;
         },
 
+        updateProgress: ({ id, type, title, poster_path, progress, duration, percent, season, episode }) => {
+          get().addContinueWatching({ id, type, title, poster_path, progress, duration, percent, season, episode, timestamp: Date.now() });
+        },
+
         // ── History ──
         history: [],
         addToHistory: (item) =>
@@ -331,46 +350,40 @@ const useStore = create(
         addonCatalog: [],
         setAddons: (addons) => set((s) => ({ addons })),
         setAddonCatalog: (catalog) => set((s) => ({ addonCatalog: catalog })),
-        toggleAddon: (url) =>
+        toggleAddon: (url) => {
           set((s) => ({
             addons: s.addons.map((a) =>
               a.url === url ? { ...a, enabled: !a.enabled } : a
             ),
-          })),
-        updateAddon: (url, data) =>
+          }));
+        },
+        updateAddon: (url, data) => {
           set((s) => ({
             addons: s.addons.map((a) => (a.url === url ? { ...a, ...data } : a)),
-          })),
-        removeAddon: (url) =>
+          }));
+        },
+        removeAddon: (url) => {
+          log('info', 'addon removed', { url });
           set((s) => ({
             addons: s.addons.filter((a) => a.url !== url),
-          })),
-        addAddon: (url) =>
-          set((s) => {
-            if (s.addons.some((a) => a.url === url)) return {};
-            return { addons: [...s.addons, { url, enabled: true, manifest: null }] };
-          }),
-
-        // ── Fetch addon manifest and add to list ──
-        fetchManifest: async (transportUrl) => {
+          }));
+        },
+        addAddon: async (transportUrl) => {
           try {
             const { fetchManifest } = await import('../lib/addons');
             const manifest = await fetchManifest(transportUrl);
             set((s) => {
-              if (s.addons.some((a) => a.url === transportUrl)) return {};
+              if (s.addons.some((a) => a.url === transportUrl || a.transportUrl === transportUrl)) return s;
               return {
-                addons: [...s.addons, {
-                  url: transportUrl,
-                  enabled: true,
-                  manifest,
-                  transportUrl,
-                }],
+                addons: [...s.addons, { url: transportUrl, transportUrl, enabled: true, manifest }],
               };
             });
+            log('info', 'addon added', { name: manifest?.name, url: transportUrl });
             return manifest;
           } catch (e) {
+            log('error', 'addon add failed', { url: transportUrl, error: e.message });
             get().addToast?.(`Failed to fetch manifest: ${e.message}`, 'error');
-            return null;
+            throw e;
           }
         },
 
@@ -384,24 +397,28 @@ const useStore = create(
           })),
         removeIPTVProvider: (id) =>
           set((s) => ({ iptvProviders: s.iptvProviders.filter((p) => p.id !== id) })),
-        forceSyncIPTV: async () => {
+        forceSync: async () => {
           try {
             const state = get();
             const token = state?.auth?.token;
-            const providers = state.iptvProviders;
             if (!token) throw new Error('Not authenticated');
             const baseUrl = getApiBaseUrl() || '';
-            const res = await fetch(`${baseUrl}/api/sync`, {
+            log('info', 'sync push start', { addons: state.addons.length });
+            const res = await fetch(`${baseUrl}/api/sync?action=push`, {
               method: 'POST',
-              headers: {
-                Authorization: `Bearer ${token}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ iptv: providers }),
+              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                addons: state.addons.map(a => ({ url: a.transportUrl || a.url, enabled: a.enabled })),
+                iptvProviders: state.iptvProviders,
+                watchlist: state.watchlist,
+                continueWatching: state.continueWatching,
+              }),
             });
             if (!res.ok) throw new Error(`Sync failed: ${res.status}`);
+            log('info', 'sync push ok');
             return { success: true };
           } catch (e) {
+            log('error', 'sync push error', e.message);
             return { error: e.message };
           }
         },
@@ -452,15 +469,55 @@ const useStore = create(
         },
 
         // ── Init helpers ──
-        initAddons: async () => {
+        pullSync: async () => {
           try {
+            const state = get();
+            const token = state?.auth?.token;
+            if (!token) return;
             const baseUrl = getApiBaseUrl() || '';
-            const res = await fetch(`${baseUrl}/api/admin/addons?type=global`);
+            log('info', 'sync pull start');
+            const res = await fetch(`${baseUrl}/api/sync?action=pull`, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
             if (res.ok) {
-              const data = await res.json();
-              set((s) => ({ addons: data.addons || s.addons }));
+              const { data } = await res.json();
+              if (data) {
+                log('info', 'sync pull ok', { addons: data.addons?.length, watchlist: data.watchlist?.length });
+                // Keep existing manifests for addons that match, fetch missing ones
+                const currentAddons = get().addons;
+                const newAddons = await Promise.all((data.addons || []).map(async (cloudAddon) => {
+                  const addonUrl = cloudAddon.url || cloudAddon.transportUrl;
+                  if (!addonUrl) return null;
+                  const existing = currentAddons.find(a => a.url === addonUrl || a.transportUrl === addonUrl);
+                  if (existing && existing.manifest) {
+                    return { ...existing, enabled: cloudAddon.enabled };
+                  }
+                  try {
+                    const { fetchManifest } = await import('../lib/addons');
+                    const manifest = await fetchManifest(addonUrl);
+                    return { url: addonUrl, transportUrl: addonUrl, enabled: cloudAddon.enabled, manifest };
+                  } catch (e) {
+                    log('warn', `manifest fetch failed: ${addonUrl}`, e.message);
+                    return { url: addonUrl, transportUrl: addonUrl, enabled: cloudAddon.enabled, manifest: null };
+                  }
+                })).then(arr => arr.filter(Boolean));
+
+                set((s) => ({
+                  addons: newAddons.length > 0
+                    ? newAddons.map(a => {
+                        const prev = s.addons.find(sa => sa.url === a.url || sa.transportUrl === a.url);
+                        return { ...a, manifest: a.manifest || prev?.manifest || null };
+                      })
+                    : s.addons,
+                  iptvProviders: data.iptvProviders?.length > 0 ? data.iptvProviders : s.iptvProviders,
+                  watchlist: data.watchlist?.length > 0 ? data.watchlist : s.watchlist,
+                  continueWatching: data.continueWatching?.length > 0 ? data.continueWatching : s.continueWatching,
+                }));
+              }
+            } else {
+              log('warn', `sync pull failed: ${res.status}`);
             }
-          } catch { /* silently fail */ }
+          } catch (e) { log('error', 'sync pull error', e.message); }
         },
 
         initWatchlist: () => {
@@ -499,11 +556,15 @@ const useStore = create(
                 user: data.user,
                 token,
                 tier: data.user?.tier || 'free',
+                assignedAddons: data.assignedAddons || s.auth.assignedAddons || [],
               },
+              recommendedAddons: data.recommendedAddons?.length ? data.recommendedAddons : s.recommendedAddons,
+              ultraAddons: data.ultraAddons?.length ? data.ultraAddons : s.ultraAddons,
             }));
             if (data.user) localStorage.setItem('bfs_user', JSON.stringify(data.user));
+            setLogUser(data.user.id, token);
+            log('info', 'auth ok', { userId: data.user.id, tier: data.user.tier });
           } else {
-            // Fallback: check for a stored user without server validation
             const storedUser = getStoredUser();
             const token = getToken();
             if (storedUser && token) {
@@ -516,7 +577,15 @@ const useStore = create(
                   tier: storedUser?.tier || 'free',
                 },
               }));
+              setLogUser(storedUser.id, token);
+              log('info', 'auth restored from cache', { userId: storedUser.id });
+            } else {
+              log('info', 'auth none — guest session');
             }
+          }
+          if (get().auth.loggedIn) {
+            get().pullSync();
+            get().initServices();
           }
         },
 
