@@ -243,8 +243,14 @@ const useStore = create(
         setDetailModal: (id) => set({ detailModal: id }),
         playerOpen: false,
         playerItem: null,
-        openPlayer: (item) => set({ playerOpen: true, playerItem: item }),
-        closePlayer: () => set({ playerOpen: false, playerItem: null }),
+        playerLoading: false,
+        playerError: null,
+        playerPoster: null,
+        openPlayer: (item) => set({ playerOpen: true, playerItem: item, playerLoading: true, playerError: null }),
+        closePlayer: () => set({ playerOpen: false, playerItem: null, playerLoading: false, playerError: null, playerPoster: null }),
+        setPlayerLoading: (loading) => set({ playerLoading: loading }),
+        setPlayerError: (error) => set({ playerError: error }),
+        setPlayerPoster: (poster) => set({ playerPoster: poster }),
         toasts: [],
         addToast: (msg, type = 'info') => {
           const id = nanoid(8);
@@ -587,6 +593,38 @@ const useStore = create(
             get().pullSync();
             get().initServices();
           }
+        },
+
+        // ── Debrid Services ──
+        getAvailableDebridServices: () => {
+          const state = get();
+          const services = [];
+          
+          if (state.services.torbox?.connected) {
+            services.push({ 
+              name: 'torbox', 
+              displayName: 'TorBox',
+              apiKey: state.services.torbox.apiKey 
+            });
+          }
+          
+          if (state.services.realdebrid?.connected) {
+            services.push({ 
+              name: 'realdebrid', 
+              displayName: 'Real-Debrid',
+              apiKey: state.services.realdebrid.apiKey 
+            });
+          }
+          
+          if (state.services.alldebrid?.connected) {
+            services.push({ 
+              name: 'alldebrid', 
+              displayName: 'AllDebrid',
+              apiKey: state.services.alldebrid.apiKey 
+            });
+          }
+          
+          return services;
         },
 
         // ── Reset full state ──
