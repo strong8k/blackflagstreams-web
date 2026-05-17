@@ -55,7 +55,7 @@ export default function LegalPage() {
         </section>
 
         <section>
-          <h2>DMCA & Copyright</h2>
+          <h2>DMCA &amp; Copyright</h2>
           <p>
             We don't host infringing content. If a third-party addon is serving something it shouldn't,
             take it up with that addon's developer — we have no control over what they index or serve.
