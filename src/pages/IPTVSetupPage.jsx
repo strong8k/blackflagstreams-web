@@ -19,7 +19,7 @@ export default function IPTVSetupPage() {
   const addProvider = useStore(s => s.addIPTVProvider);
   const updateProvider = useStore(s => s.updateIPTVProvider);
   const removeProvider = useStore(s => s.removeIPTVProvider);
-  const forceSyncIPTV = useStore(s => s.forceSyncIPTV);
+  const forceSync = useStore(s => s.forceSync);
   const addToast = useStore(s => s.addToast);
 
   const [mode, setMode] = useState('xtream');
@@ -140,7 +140,7 @@ export default function IPTVSetupPage() {
     const cooldown = getForceSyncCooldown();
     if (cooldown > 0) { setSyncCooldown(cooldown); return; }
     setSyncing(true);
-    const result = await forceSyncIPTV();
+    const result = await forceSync();
     setSyncing(false);
     if (result?.error) {
       addToast(result.error, 'error');

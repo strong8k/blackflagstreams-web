@@ -1,9 +1,11 @@
 name = "blackflagstreams"
-compatibility_date = "2023-10-30"
+compatibility_date = "2026-05-17"
 pages_build_output_dir = "./dist"
+
+[[kv_namespaces]]
+binding = "SYNC_KV"
+id = "860a18710b06493fa45ce3f432f8bac4"
 
 [vars]
 NODE_VERSION = "18"
 
-[build]
-command = "npm run build"

@@ -3,6 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { getTVDetails, getSeasonDetails, getExternalIds, img } from '../lib/tmdb';
 import { fetchAllStreams, classifyStream, getStreamTitle, buildPlayableUrl } from '../lib/addons';
+import { log } from '../lib/logger';
+import { getApiBaseUrl } from '../lib/auth';
 import { searchIPTVVOD } from '../lib/iptv';
 import { useStore } from '../lib/store';
 import LogoSvg from '../assets/bfs.svg';
@@ -43,11 +45,14 @@ export default function EpisodePage() {
   const [streamsLoading, setStreamsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState('All');
+  const [watchedState, setWatchedState] = useState(null); // { watched, percent } or null
 
   const addons = useStore(s => s.addons);
   const activeProfile = useStore(s => s.activeProfile);
   const settings = useStore(s => s.settings);
   const tier = useStore(s => s.auth.tier);
+  const token = useStore(s => s.auth.token);
+  const services = useStore(s => s.services);
   const addToast = useStore(s => s.addToast);
   const isPaid = ['premium', 'pro', 'ultra'].includes(tier);
 
@@ -78,6 +83,34 @@ export default function EpisodePage() {
     return () => { cancelled = true; };
   }, [id, season, ep]);
 
+  // Check Stremio watched state for this episode
+  useEffect(() => {
+    if (!loading && imdbId && token) {
+      (async () => {
+        try {
+          const apiBase = getApiBaseUrl();
+          const res = await fetch(`${apiBase}/api/stremio/episode-watched?imdbId=${imdbId}&season=${season}&episode=${ep}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setWatchedState(data);
+            // Persist to sessionStorage so SeasonPage shows checkmark
+            if (data.watched) {
+              try {
+                const key = `bfs_watched_tv_${id}_s${season}`;
+                const raw = sessionStorage.getItem(key);
+                const existing = raw ? JSON.parse(raw) : {};
+                existing[String(ep)] = true;
+                sessionStorage.setItem(key, JSON.stringify(existing));
+              } catch {}
+            }
+          }
+        } catch {}
+      })();
+    }
+  }, [loading, imdbId, token, season, ep]);
+
   useEffect(() => {
     if (!loading && (imdbId || id) && addons.length > 0) loadStreams();
   }, [loading, imdbId, addons]);
@@ -97,6 +130,7 @@ export default function EpisodePage() {
     }
     const enabledAddons = addons.filter(a => a.enabled && a.manifest);
     const stremioId = imdbId ? `${imdbId}:${season}:${ep}` : `tmdb:${id}:${season}:${ep}`;
+    log('info', 'streams load start', { stremioId, addons: enabledAddons.length });
 
     const results = await fetchAllStreams(enabledAddons, 'series', stremioId, id, (newStreams) => {
       setStreams(prev => {
@@ -109,16 +143,18 @@ export default function EpisodePage() {
           return true;
         });
       });
-    }, settings.effectiveCorsProxy);
+    }, settings.effectiveCorsProxy, { token, services, baseUrl: getApiBaseUrl() || '' });
 
     setStreams(results);
     setStreamsLoading(false);
-    // Cache for 2 hours
     const { setCachedStreams } = await import('../lib/tmdb');
     setCachedStreams('tv_episode', `${id}:${season}:${ep}`, results);
+    log('info', 'streams load done', { total: results.length, byAddon: Object.fromEntries(
+      [...new Set(results.map(s => s._addonName || 'unknown'))].map(n => [n, results.filter(s => (s._addonName || 'unknown') === n).length])
+    )});
   };
 
-  const handleStreamPlay = (stream) => {
+  const handleStreamPlay = async (stream) => {
     if (!activeProfile) { navigate('/onboarding'); return; }
     const cls = classifyStream(stream);
     const streamTitle = `${series?.name} - S${season}E${ep} - ${episode?.name}`;
@@ -135,16 +171,43 @@ export default function EpisodePage() {
     if (cls === 'youtube') { window.open(`https://www.youtube.com/watch?v=${stream.ytId}`, '_blank'); return; }
 
     if (cls === 'needs-debrid') {
-      const p = new URLSearchParams({ ...baseParams, infoHash: stream.infoHash });
-      if (stream.fileIdx !== undefined) p.set('fileIdx', stream.fileIdx);
+      // infoHash-only stream — try debrid resolve first, then proxy, then give up
+      const hasDebrid = services?.torbox?.connected || services?.realdebrid?.connected || services?.alldebrid?.connected;
+      const resolveParams = {
+        resolve: hasDebrid ? 'debrid' : 'proxy',
+        infoHash: stream.infoHash,
+        imdbId,
+        resolveName: stream.title || stream.name || '',
+        resolveProxy: settings.effectiveCorsProxy,
+        logo: stream._addonLogo || '',
+      };
+      const p = new URLSearchParams({
+        ...baseParams,
+        url: '',
+        ...resolveParams,
+      });
       navigate(`/player?${p.toString()}`);
       return;
     }
-    const url = buildPlayableUrl(stream, settings.effectiveCorsProxy);
-    if (url) {
-      const p = new URLSearchParams({ ...baseParams, url });
-      navigate(`/player?${p.toString()}`);
+    let url = buildPlayableUrl(stream, settings.effectiveCorsProxy);
+    if (!url) {
+      addToast('Could not build a playable URL for this stream.', 'error');
+      return;
     }
+    // Extract-style URLs (e.g. WebStreamrMBG /extract/ endpoints) return JSON with the real URL.
+    if (stream.url?.includes('/extract/')) {
+      try {
+        const proxyBase = settings.effectiveCorsProxy;
+        const extractUrl = proxyBase ? `${proxyBase}?url=${encodeURIComponent(stream.url)}` : stream.url;
+        const res = await fetch(extractUrl, { headers: { Accept: 'application/json' } });
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.url) url = data.url;
+        }
+      } catch {}
+    }
+    const p = new URLSearchParams({ ...baseParams, url });
+    navigate(`/player?${p.toString()}`);
   };
 
   const filteredStreams = useMemo(() => {
@@ -240,7 +303,9 @@ export default function EpisodePage() {
             
             {!streamsLoading && streams.length === 0 && (
               <div className="no-streams">
-                <p>No streams found. Try adding more addons or check your connection.</p>
+                <p>{(services?.torbox?.connected || services?.realdebrid?.connected || services?.alldebrid?.connected)
+                  ? 'No cached results found. The content may not be available on your debrid service, or it hasn\'t been cached yet.'
+                  : 'No streams available. Connect a debrid service to access cached content.'}</p>
               </div>
             )}
 

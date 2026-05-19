@@ -18,9 +18,9 @@ BlackFlagStreams is a streaming aggregation platform consisting of:
 │   React/Vite    │     │  - Auth               │     │  Sync state     │
 │   Zustand store │     │  - Admin              │     │  Config         │
 │                 │     │  - Sync               │     │  Addon configs  │
-└────────┬────────┘     │  - Trakt relay        │     └────────┬────────┘
-         │              │  - Stremio relay       │              │
-         │              │  - Debrid endpoints    │              │
+└────────┬────────┘     │  - Trakt relay        │     │  AIOStreams     │
+         │              │  - Stremio relay       │     │  profiles/keys  │
+         │              │  - AIOStreams proxy    │     └────────┬────────┘
          │              │  - TeaTV catalog/stream│              │
          │              └───────────┬────────────┘              │
          │                          │                          │
@@ -28,11 +28,15 @@ BlackFlagStreams is a streaming aggregation platform consisting of:
          │    │                                                │
          ▼    ▼                                                ▼
    ┌──────────┐  ┌───────────┐  ┌───────────┐  ┌────────────────────┐
-   │ TMDB API │  │ Trakt API │  │ Stremio   │  │ Debrid Services    │
-   │          │  │           │  │ API       │  │ - Real-Debrid      │
-   │ (movies) │  │ (sync)    │  │ (addons)  │  │ - All-Debrid       │
-   │          │  │           │  │           │  │ - TorBox           │
-   └──────────┘  └───────────┘  └───────────┘  │ - RPDB             │
+   │ TMDB API │  │ Trakt API │  │ Stremio   │  │   AIOStreams       │
+   │          │  │           │  │ API       │  │   (Self-hosted)    │
+   │ (movies) │  │ (sync)    │  │ (addons)  │  ├────────────────────┤
+   │          │  │           │  │           │  │ Torrent discovery  │
+   └──────────┘  └───────────┘  └───────────┘  │ Debrid cache check │
+                                                │ Link resolution    │
+                                                │ - Real-Debrid      │
+                                                │ - All-Debrid       │
+                                                │ - TorBox           │
                                                 └────────────────────┘
 ```
 
@@ -79,7 +83,8 @@ BlackFlagStreams is a streaming aggregation platform consisting of:
 | `/api/trakt/disconnect` | POST | Revoke Trakt token |
 | `/api/trakt/sync` | POST | Pull watchlist/history from Trakt |
 | `/api/trakt/push` | POST | Scrobble watch progress to Trakt |
-| `/api/stremio/auth` | POST | Authenticate with Stremio API |
+| `/api/stremio/auth` | POST | Generate Stremio device pairing code |
+| `/api/stremio/poll` | POST | Poll Stremio pairing for completion |
 | `/api/stremio/status` | GET | Check Stremio connection status |
 | `/api/stremio/disconnect` | POST | Remove Stremio auth key |
 | `/api/stremio/library` | GET | Fetch & resolve Stremio library (IMDB→TMDB) |
@@ -103,12 +108,23 @@ BlackFlagStreams is a streaming aggregation platform consisting of:
 | `/api/teatv/manifest.json` | GET | Stremio-compatible manifest |
 | `/api/teatv/catalog/[type]/[id].json` | GET | Catalog items (TMDB-backed) |
 | `/api/teatv/stream/[type]/[id].json` | GET | Resolve streams from embed providers |
+| `/api/debrid/streams` | GET | AIOStreams-proxied stream resolution |
+| `/api/debrid/resolve` | POST | Batch infoHash → URL via AIOStreams |
+| `/api/torrent/streams` | GET | AIOStreams torrent discovery + cache check |
+| `/api/torrent/resolve` | POST | Single infoHash → URL via AIOStreams |
+| `/api/aiostreams/settings` | GET/POST | User debrid preferences (res/lang/size) |
+
+### AIOStreams Internal
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/aiostreams/_userdata` | — | Shared helpers (buildUserData, encodeUserData, key mgmt) |
 
 ### Legacy / Internal
 | Route | Method | Description |
 |-------|--------|-------------|
 | `/api/streams` | GET | Internal stream resolution |
 | `/api/beta-apply` | POST | Beta access request |
+| `/api/torrent/token` | POST | Generate torrent proxy token (premium feature) |
 
 ## Frontend Structure (`bfs1/src/`)
 
@@ -198,6 +214,8 @@ lib/
 | `admin:2fa_secret` | Admin TOTP secret |
 | `link:{code}` | Device link code → {userId, approved} |
 | `user:{userId}` | User record (duplicate — legacy) |
+| `admin:aiostreams_default_profile` | Default AIOStreams UserData profile (admin-controlled) |
+| `aiostreams:{userId}` | Per-user AIOStreams overrides (debrid keys + quality settings) |
 
 ## Security Model
 
@@ -219,6 +237,8 @@ lib/
 8. **`forceSyncIPTV` URL bug** — was hitting CORS proxy instead of app origin (fixed)
 9. **Poll endpoint mismatch** — Flutter client called `/poll` but server used `/approve` (fixed)
 10. **Hardcoded CORS proxy** in Android stremio_service (made configurable)
+11. **AIOSTreams integration** — All custom YTS/EZTV + debrid API code replaced with AIOStreams proxy. Old `_debrid.js` deleted. Backend now routes all debrid resolution through `x-aiostreams-user-data` header. Frontend Debrid Management section controls resolutions/languages/size limits.
+12. **Stremio auth updated** — Stremio now uses code-based device linking (like AllDebrid PIN flow) instead of email/password auth. User visits strem.io/link, enters a code, and BFS polls for completion.
 
 ## Deployment
 

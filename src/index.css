@@ -6,6 +6,12 @@
 @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&family=Outfit:wght@300;400;500;600;700;800&display=swap');
 
 :root {
+  /* ── Pirate Palette (aligned with Flutter theme.dart) ── */
+  --color-bg-deep: #0D1117;
+  --color-gold:    #D4A843;
+  --color-teal:    #2EC4B6;
+  --color-navy:    #1B2838;
+
   /* ── Backgrounds ── */
   --bg-abyss:      #020204;
   --bg-base:       #050508;
@@ -16,16 +22,16 @@
   --bg-overlay:    rgba(2, 2, 4, 0.95);
   --bg-input:      rgba(255, 255, 255, 0.04);
 
-  /* ── Accent: Electric Red ── */
-  --accent:           #e90000;
-  --accent-hover:     #ff1a1a;
-  --accent-glow:      rgba(233, 0, 0, 0.4);
-  --accent-secondary: #9b0000;
+  /* ── Accent: Pirate Gold ── */
+  --accent:           #D4A843;
+  --accent-hover:     #E0C060;
+  --accent-glow:      rgba(212, 168, 67, 0.4);
+  --accent-secondary: #A8843A;
 
   /* ── Gold ── */
-  --gold:        #f0c040;
-  --gold-glow:   rgba(240, 192, 64, 0.4);
-  --gold-dark:   #c49a20;
+  --gold:        #D4A843;
+  --gold-glow:   rgba(212, 168, 67, 0.4);
+  --gold-dark:   #A8843A;
 
   /* ── Text ── */
   --text-primary:   #ffffff;
@@ -45,9 +51,9 @@
   --radius-full: 9999px;
 
   /* ── Primary (alias for accent) ── */
-  --primary: #e90000;
-  --primary-glow: rgba(233, 0, 0, 0.4);
-  --primary-hover: #ff1a1a;
+  --primary: #D4A843;
+  --primary-glow: rgba(212, 168, 67, 0.4);
+  --primary-hover: #E0C060;
 
   /* ── Shadows ── */
   --shadow-md: 0 8px 32px rgba(0, 0, 0, 0.5);
@@ -415,8 +421,9 @@ h1, h2, h3, h4 { font-weight: 700; line-height: 1.2; letter-spacing: -0.02em; }
   color: #fff;
 }
 .sidebar-link.active {
-  background: rgba(233, 0, 0, 0.15);
+  background: rgba(212, 168, 67, 0.18);
   color: #fff;
+  border: 1px solid rgba(212, 168, 67, 0.25);
 }
 .sidebar-link svg {
   flex-shrink: 0;
@@ -601,11 +608,11 @@ h1, h2, h3, h4 { font-weight: 700; line-height: 1.2; letter-spacing: -0.02em; }
 .btn-ghost:hover { color: var(--text-primary); background: rgba(255,255,255,0.04); }
 
 .btn-gold {
-  background: linear-gradient(135deg, #f0c040, #d4a020);
-  color: #0a0a0f;
+  background: linear-gradient(135deg, #D4A843, #A8843A);
+  color: #0D1117;
   font-weight: 700;
 }
-.btn-gold:hover { filter: brightness(1.1); transform: translateY(-1px); }
+.btn-gold:hover { filter: brightness(1.1); transform: translateY(-1px); box-shadow: 0 4px 20px rgba(212, 168, 67, 0.45); }
 
 .btn-sm { padding: 0.4rem 1rem; font-size: 0.8rem; }
 .btn-icon {

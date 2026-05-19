@@ -10,13 +10,13 @@ export default function Toasts() {
         {toasts.map(t => (
           <motion.div
             key={t.id}
-            className="toast"
+            className={`toast toast-${t.type || 'info'}`}
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, x: 40 }}
             transition={{ duration: 0.2 }}
           >
-            {t.message}
+            {t.msg}
           </motion.div>
         ))}
       </AnimatePresence>

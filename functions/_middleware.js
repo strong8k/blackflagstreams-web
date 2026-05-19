@@ -1,7 +1,14 @@
 export async function onRequest(context) {
-  const { request, next } = context;
+  const { request, next, env } = context;
   const url = new URL(request.url);
   const path = url.pathname.toLowerCase();
+
+  // DIAG — log every API request to help trace the 3 bugs
+  if (path.startsWith('/api/')) {
+    console.log('[Middleware] DIAG —', request.method, path,
+      'SYNC_KV exists:', !!env?.SYNC_KV,
+      'has Auth header:', !!request.headers.get('Authorization'));
+  }
 
   // 🏴‍☠️ BlackFlag Honeypot / Protection
   // Block common vulnerability probes (WordPress, PHP, Env files, etc.)
@@ -65,6 +72,48 @@ export async function onRequest(context) {
     );
   }
 
-  // Continue to the next middleware or asset
-  return next();
+  try {
+    const response = await next();
+    if (path.startsWith('/api/') && response.status >= 500) {
+      await appendServerLog(env, request, 'error', `API ${response.status}: ${request.method} ${url.pathname}`, {
+        status: response.status,
+        statusText: response.statusText,
+      });
+    }
+    return response;
+  } catch (error) {
+    await appendServerLog(env, request, 'error', `Unhandled API error: ${request.method} ${url.pathname}`, {
+      message: error?.message,
+      stack: error?.stack?.slice(0, 2000),
+    });
+    throw error;
+  }
+}
+
+async function appendServerLog(env, request, level, message, data = null) {
+  if (!env?.SYNC_KV) return;
+  const url = new URL(request.url);
+  if (url.pathname === '/api/logs') return;
+
+  const entry = JSON.stringify({
+    id: `server_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    timestamp: new Date().toISOString(),
+    session: 'server',
+    level,
+    url: request.url,
+    userAgent: request.headers.get('User-Agent') || null,
+    cfRay: request.headers.get('CF-Ray') || null,
+    ip: request.headers.get('CF-Connecting-IP') || null,
+    message,
+    ...(data ? { data: JSON.stringify(data) } : {}),
+  });
+
+  // Use daily-bucketed keys to keep each KV value small (avoid O(n) read-modify-write on one giant key)
+  const day = new Date().toISOString().slice(0, 10); // "2026-05-17"
+  const key = `logs:server:${day}`;
+  const existing = await env.SYNC_KV.get(key) || '';
+  let lines = existing.split('\n').filter(l => l.trim());
+  lines.push(entry);
+  if (lines.length > 2000) lines = lines.slice(-2000);
+  await env.SYNC_KV.put(key, lines.join('\n'), { expirationTtl: 7 * 24 * 3600 }); // auto-expire after 7 days
 }

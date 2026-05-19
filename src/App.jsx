@@ -5,6 +5,8 @@ import Sidebar from './components/Sidebar';
 import Toasts from './components/Toasts';
 import { useStore } from './lib/store';
 import { getApiBaseUrl } from './lib/auth';
+import { log, clearLogs, initLogger } from './lib/logger';
+initLogger(); // intercept console.*, errors, clicks, navigation — must run before anything else
 
 // ── Lazy-loaded pages ──
 const HomePage      = lazy(() => import('./pages/HomePage'));
@@ -27,6 +29,7 @@ const LoginPage     = lazy(() => import('./pages/LoginPage'));
 const AdminPage     = lazy(() => import('./pages/AdminPage'));
 const BetaTesterPage = lazy(() => import('./pages/BetaTesterPage'));
 const LegalPage     = lazy(() => import('./pages/LegalPage'));
+const LogsPage      = lazy(() => import('./pages/LogsPage'));
 const NotFoundPage  = lazy(() => import('./pages/NotFoundPage'));
 const TorBoxPage    = lazy(() => import('./pages/TorBoxPage'));
 const ProfilePickerPage = lazy(() => import('./pages/ProfilePickerPage'));
@@ -70,8 +73,11 @@ function AppShell() {
   );
   const setGlobalConfig = useStore(s => s.setGlobalConfig);
   const initAuth = useStore(s => s.initAuth);
+  const authUser = useStore(s => s.auth?.user);
 
   useEffect(() => {
+    log('info', 'App initialized');
+
     const baseUrl = getApiBaseUrl();
     const cachedKey = localStorage.getItem('bfs_user_tmdb_key') || localStorage.getItem('bfs_tmdb_key');
     if (cachedKey) setConfigReady(true);
@@ -90,7 +96,7 @@ function AppShell() {
       .catch(() => setConfigReady(true));
 
     initAuth();
-  }, []);
+  }, [setGlobalConfig, initAuth]);
 
   // Link code for QR auth — TV device pairing
   const linkCode = new URLSearchParams(location.search).get('link');
@@ -137,8 +143,10 @@ function AppShell() {
               <Route path="/login" element={<PageWrapper><LoginPage /></PageWrapper>} />
               <Route path="/profiles" element={<PageWrapper><ProfilePickerPage /></PageWrapper>} />
               <Route path="/xbf-ops-9a2c" element={<PageWrapper><AdminPage /></PageWrapper>} />
-              <Route path="/beta" element={<PageWrapper><BetaTesterPage /></PageWrapper>} />
+              <Route path="/admin" element={<PageWrapper><AdminPage /></PageWrapper>} />
+             <Route path="/beta" element={<PageWrapper><BetaTesterPage /></PageWrapper>} />
               <Route path="/legal" element={<PageWrapper><LegalPage /></PageWrapper>} />
+              <Route path="/logs" element={<PageWrapper><LogsPage /></PageWrapper>} />
               <Route path="/torbox" element={<PageWrapper><TorBoxPage /></PageWrapper>} />
               <Route path="*" element={<PageWrapper><NotFoundPage /></PageWrapper>} />
             </Routes>
@@ -151,13 +159,11 @@ function AppShell() {
 }
 
 export default function App() {
-  const initAddons = useStore(s => s.initAddons);
   const initWatchlist = useStore(s => s.initWatchlist);
   const initContinueWatching = useStore(s => s.initContinueWatching);
   const initIPTV = useStore(s => s.initIPTV);
 
   useEffect(() => {
-    initAddons();
     initWatchlist();
     initContinueWatching();
     initIPTV();

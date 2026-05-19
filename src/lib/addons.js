@@ -146,19 +146,42 @@ export async function fetchCatalog(transportUrl, type, catalogId, extra = {}) {
 // ── Streams ──
 
 export async function fetchStreams(transportUrl, type, id, proxyUrl = null) {
-  const base = getBaseUrl(transportUrl);
+  let finalUrl = transportUrl;
+  const base = getBaseUrl(finalUrl);
   const url = `${base}/stream/${type}/${id}.json`;
   try {
     const data = await safeFetch(url, 15000, proxyUrl);
     return (data.streams || []).map(stream => ({
       ...stream,
-      _addonUrl: transportUrl,
+      _addonUrl: finalUrl,
       _addonName: null,
     }));
   } catch { return []; }
 }
 
-export async function fetchAllStreams(addons, type, id, tmdbId, onProgress, proxyUrl = null) {
+
+async function fetchDebridCacheStreams(imdbId, type, stremioId, token, services, baseUrl) {
+  const hasDebrid = services?.torbox?.connected || services?.realdebrid?.connected || services?.alldebrid?.connected;
+  if (!token || !hasDebrid) return [];
+  try {
+    const params = new URLSearchParams({ imdbId, type });
+    if (type === 'series' && stremioId?.includes(':')) {
+      const parts = stremioId.split(':');
+      if (parts[1]) params.set('season', parts[1]);
+      if (parts[2]) params.set('episode', parts[2]);
+    }
+    const res = await fetch(`${baseUrl}/api/torrent/streams?${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.streams || [];
+  } catch { return []; }
+}
+
+
+export async function fetchAllStreams(addons, type, id, tmdbId, onProgress, proxyUrl = null, opts = {}) {
+  const { token, services, baseUrl = '' } = opts;
   const streamPromises = addons
     .filter(addon => {
       if (!addon.manifest) return false;
@@ -194,17 +217,116 @@ export async function fetchAllStreams(addons, type, id, tmdbId, onProgress, prox
       } catch { return []; }
     });
 
+  // Debrid as its own stream source: checks cache on TorBox/AllDebrid/RD for this content.
+  const imdbId = id?.startsWith('tt') ? id.split(':')[0] : null;
+  if (imdbId) {
+    streamPromises.push(
+      fetchDebridCacheStreams(imdbId, type, id, token, services, baseUrl)
+        .then(streams => {
+          if (onProgress && streams.length > 0) onProgress(streams);
+          return streams;
+        })
+        .catch(() => [])
+    );
+  }
+
   const results = await Promise.allSettled(streamPromises);
-  const seen = new Set();
-  return results
+  const allStreams = results
     .filter(r => r.status === 'fulfilled')
-    .flatMap(r => r.value)
-    .filter(stream => {
-      const key = stream.url || stream.infoHash || stream.ytId || stream.externalUrl || `${stream._addonId || ''}:${stream.title || stream.name || ''}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
+    .flatMap(r => r.value);
+
+  const hasDebrid = services?.torbox?.connected || services?.realdebrid?.connected || services?.alldebrid?.connected;
+
+  // infoHash-only streams from non-AIO addons → expose as external magnets when no debrid
+  if (!hasDebrid) {
+    for (const stream of allStreams) {
+      if (stream.infoHash && !stream.url && !stream.externalUrl) {
+        stream.externalUrl = `magnet:?xt=urn:btih:${stream.infoHash}${stream.name ? `&dn=${encodeURIComponent(stream.name)}` : ''}`;
+      }
+    }
+  }
+
+  // Deduplicate
+  const seen = new Set();
+  const unique = allStreams.filter(stream => {
+    const key = stream.url || stream.infoHash || stream.ytId || stream.externalUrl || `${stream._addonId || ''}:${stream.title || stream.name || ''}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  // Group by source: each addon + debrid as separate sources
+  const groups = {};
+  for (const s of unique) {
+    const source = s._isDebrid ? '__debrid__' : (s._addonName || '__unknown__');
+    if (!groups[source]) groups[source] = [];
+    groups[source].push(s);
+  }
+
+  // Limit each source: max 6 per resolution tier (4K, 1080p, 720p), max 20 total per source
+  const RES_TIERS = [
+    { pattern: /[24][Kk]|2160|1440/iu, name: '4K' },
+    { pattern: /1080|FHD/iu, name: '1080p' },
+    { pattern: /720|HD/iu, name: '720p' },
+  ];
+  const OTHER = 'other';
+
+  function resolutionTier(stream) {
+    const text = (stream.name || stream.title || stream._addonName || '') + ' ' + (stream.quality || '');
+    for (const tier of RES_TIERS) {
+      if (tier.pattern.test(text)) return tier.name;
+    }
+    return OTHER;
+  }
+
+  const limited = [];
+  for (const [source, streams] of Object.entries(groups)) {
+    // Per source: group by resolution tier, take max 6 per tier
+    const tierCounts = {};
+    const perSource = [];
+    // Sort within source: better resolutions first
+    streams.sort((a, b) => {
+      const aTier = RES_TIERS.findIndex(t => t.pattern.test((a.name || a.title || '') + ' ' + (a.quality || '')));
+      const bTier = RES_TIERS.findIndex(t => t.pattern.test((b.name || b.title || '') + ' ' + (b.quality || '')));
+      // -1 = not found (other), put at end
+      const aRank = aTier === -1 ? 99 : aTier;
+      const bRank = bTier === -1 ? 99 : bTier;
+      return aRank - bRank;
     });
+    for (const s of streams) {
+      const tier = resolutionTier(s);
+      if (!tierCounts[tier]) tierCounts[tier] = 0;
+      if (tierCounts[tier] < 6) {
+        perSource.push(s);
+        tierCounts[tier]++;
+      }
+      if (perSource.length >= 20) break;
+    }
+    limited.push(...perSource);
+  }
+
+  // Sort: TorBox debrid first, then other debrids, then addons alphabetically
+  function streamPriority(s) {
+    if (s._isTorbox) return 0;           // TorBox cached streams first
+    if (s._isDebrid) return 1;           // other debrid streams second
+    const n = (s._addonName || '').toLowerCase();
+    if (n.includes('torbox')) return 0;
+    if (n.includes('alldebrid')) return 1;
+    if (n.includes('realdebrid') || n.includes('rd') || n.includes('debrid')) return 2;
+    return 3;                            // addon streams last
+  }
+
+  limited.sort((a, b) => {
+    const aP = streamPriority(a);
+    const bP = streamPriority(b);
+    if (aP !== bP) return aP - bP;
+    // Same priority: debrid before addons
+    if (a._isDebrid && !b._isDebrid) return -1;
+    if (!a._isDebrid && b._isDebrid) return 1;
+    return (a._addonName || '').localeCompare(b._addonName || '');
+  });
+
+  return limited;
 }
 
 // ── Stream classification ──
@@ -301,3 +423,5 @@ export async function fetchAllSubtitles(addons, type, id, tmdbId) {
       return true;
     });
 }
+
+

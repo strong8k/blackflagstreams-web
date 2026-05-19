@@ -34,7 +34,7 @@ export async function onRequestGet(context) {
         await env.SYNC_KV.delete(`service:stremio:${session.userId}`);
         return json({ connected: false });
       }
-      return json({ connected: true, username: stored.email?.split('@')[0] || 'Stremio User', email: stored.email || null, lastImport: stored.lastImport || null, _authKey: stored.authKey });
+      return json({ connected: true, username: stored.email?.split('@')[0] || 'Stremio User', email: stored.email || null, lastImport: stored.lastImport || null });
     }
 
     let email = null;
@@ -48,7 +48,6 @@ export async function onRequestGet(context) {
       username: email ? email.split('@')[0] : (stored.email?.split('@')[0] || 'Stremio User'),
       email: email || stored.email || null,
       lastImport: stored.lastImport || null,
-      _authKey: stored.authKey,
     });
   } catch {
     return json({
@@ -56,7 +55,6 @@ export async function onRequestGet(context) {
       username: stored.email?.split('@')[0] || 'Stremio User',
       email: stored.email || null,
       lastImport: stored.lastImport || null,
-      _authKey: stored.authKey,
     });
   }
 }

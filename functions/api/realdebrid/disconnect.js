@@ -1,5 +1,6 @@
-// POST /api/realdebrid/disconnect — Remove Real-Debrid tokens from KV
+// POST /api/realdebrid/disconnect — Remove Real-Debrid tokens from KV and aiostreams
 import { json, preflight, validateSession } from '../_shared.js';
+import { removeUserDebridKey } from '../aiostreams/_userdata.js';
 
 export function onRequestOptions() { return preflight(); }
 
@@ -10,6 +11,7 @@ export async function onRequestPost(context) {
 
   await env.SYNC_KV.delete(`service:realdebrid:${session.userId}`);
   await env.SYNC_KV.delete(`service:rd_pending:${session.userId}`);
+  await removeUserDebridKey(env, session.userId, 'realdebrid');
 
   return json({ success: true });
 }

@@ -79,7 +79,7 @@ export async function onRequestPost(context) {
           refresh_token: tokens.refresh_token,
           client_id: env.TRAKT_CLIENT_ID,
           client_secret: env.TRAKT_CLIENT_SECRET,
-          redirect_uri: env.TRAKT_REDIRECT_URI || 'https://www.blackflagstreams.link/api/trakt/callback',
+          redirect_uri: env.TRAKT_REDIRECT_URI || `${new URL(request.url).origin}/api/trakt/callback`,
           grant_type: 'refresh_token',
         }),
       });

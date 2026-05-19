@@ -1,5 +1,7 @@
-// GET /api/torbox/status — Return TorBox account status from KV
+// GET /api/torbox/status — Return TorBox account status
+// Checks both legacy KV and aiostreams user data.
 import { json, preflight, validateSession } from '../_shared.js';
+import { hasDebridKeys } from '../aiostreams/_userdata.js';
 
 export function onRequestOptions() { return preflight(); }
 

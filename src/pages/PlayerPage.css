@@ -416,6 +416,93 @@
   color: var(--text-dim, #3a3e4e);
 }
 
+/* ── Debrid/proxy resolve overlay ── */
+.player-resolving-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.player-resolving-bg {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 10, 30, 0.85);
+  backdrop-filter: blur(8px);
+}
+.player-resolving-content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  z-index: 1;
+}
+.player-resolving-msg {
+  color: #a5b4fc;
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0;
+}
+.player-resolving-sub {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin: 0.5rem 0 0 0;
+}
+
+/* ── TMDB logo in resolve overlay ── */
+.player-resolving-logo {
+  max-width: 60%;
+  max-height: 200px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 24px var(--gold-glow, rgba(240,192,64,0.4)));
+  animation: fadeInLogo 0.5s ease forwards, logoPulse 1.5s ease-in-out 0.5s infinite;
+}
+.player-resolving-logo-fallback {
+  font-size: 2rem;
+  font-weight: 800;
+  color: #c0b06e;
+  filter: drop-shadow(0 0 24px var(--gold-glow, rgba(240,192,64,0.4)));
+  animation: logoPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes fadeInLogo {
+  from { opacity: 0; transform: scale(0.9); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* Logo pulse (matches DetailPage.css for consistency) */
+@keyframes logoPulse {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50%      { opacity: 1; transform: scale(1.05); }
+}
+
+/* ── Loading sweep bar ── */
+.player-resolving-loader-track {
+  width: 280px;
+  max-width: 60%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+.player-resolving-loader-fill {
+  position: absolute;
+  top: 0;
+  left: -40%;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, var(--gold, #f0c040), transparent);
+  border-radius: 4px;
+  animation: loadingSweep 1.5s ease-in-out infinite;
+}
+@keyframes loadingSweep {
+  0%   { left: -40%; }
+  100% { left: 100%; }
+}
+
 /* ── Responsive player controls ── */
 @media (max-width: 600px) {
   .player-controls-right { gap: 0; }

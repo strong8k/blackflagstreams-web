@@ -40,16 +40,62 @@ export {
   enqueueTraktPush,
 } from './trakt';
 
-// ═══ Stremio (email/password auth) ═══
+// ═══ Stremio (code-based device linking) ═══
 
-export async function connectStremio(email, password) {
-  LOG('Connecting Stremio...');
-  const data = await api('/api/stremio/auth', {
+export async function getStremioAuthCode() {
+  LOG('Requesting Stremio pairing code from browser (bypasses Worker WAF)...');
+  // CF Workers can't fetch link.stremio.com due to WAF, so call it from the browser directly
+  const res = await fetch('https://link.stremio.com/api/v2/create', {
     method: 'POST',
-    body: JSON.stringify({ email, password }),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
   });
-  LOG('Stremio connected:', data.email);
-  return data; // { connected, email }
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Stremio API error (${res.status}): ${errText.slice(0, 100)}`);
+  }
+  const data = await res.json();
+  const code = data?.result?.code;
+  const qr = data?.result?.qrcode;
+  const userLink = data?.result?.link;
+  if (!code) throw new Error('Stremio did not return a pairing code');
+
+  // Register the code with our backend so poll.js can check for completion
+  LOG('Got Stremio code, registering with backend:', code);
+  await api('/api/stremio/auth', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+  });
+  LOG('Stremio code registered');
+  return { code, qr, user_url: userLink || 'https://www.strem.io/link' };
+}
+
+export async function pollStremioAuth(code) {
+  // Poll Stremio's API from the browser (Worker can't reach link.stremio.com due to WAF)
+  const res = await fetch(`https://link.stremio.com/api/v2/read?type=Read&code=${encodeURIComponent(code)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Stremio poll error (${res.status}): ${errText.slice(0, 100)}`);
+  }
+
+  const data = await res.json();
+  if (!data.result) return { done: false, waiting: true };
+
+  const authKey = data.result.authKey;
+  if (!authKey) return { done: false, waiting: true };
+
+  // User completed pairing — store authKey in our backend
+  LOG('Stremio code paired, storing authKey...');
+  await api('/api/stremio/poll', {
+    method: 'POST',
+    body: JSON.stringify({ authKey }),
+  });
+  LOG('Stremio authKey stored');
+  return { done: true };
 }
 
 export async function getStremioStatus() {
@@ -59,6 +105,10 @@ export async function getStremioStatus() {
   } catch {
     return { connected: false };
   }
+}
+
+export async function importStremioLibrary(debug = false) {
+  return api(`/api/stremio/library${debug ? '?debug=true' : ''}`);
 }
 
 export async function disconnectStremio() {
@@ -155,6 +205,34 @@ export async function disconnectAD() {
   const data = await api('/api/alldebrid/disconnect', { method: 'POST' });
   LOG('All-Debrid disconnected');
   return data;
+}
+
+// ═══ AIOStreams Debrid Settings ═══
+
+export async function getDebridSettings() {
+  try {
+    const data = await api('/api/aiostreams/settings');
+    return data; // { hasDebrid, settings: { enabledResolutions, languages, sizeGlobal } }
+  } catch {
+    return { hasDebrid: false, settings: null };
+  }
+}
+
+export async function updateDebridSettings(updates) {
+  const data = await api('/api/aiostreams/settings', {
+    method: 'POST',
+    body: JSON.stringify(updates),
+  });
+  return data; // { success }
+}
+
+// ═══ AIOStreams Sync ═══
+
+export async function syncAIOStreams() {
+  const data = await api('/api/aiostreams/sync', {
+    method: 'POST',
+  });
+  return data; // { success }
 }
 
 // ═══ RPDB (API key validation) ═══

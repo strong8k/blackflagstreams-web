@@ -1,3 +1,45 @@
+/* ═══════════════════════════════════════════════════════
+   Pirate Theme — aligned with Flutter theme.dart
+   ═══════════════════════════════════════════════════════ */
+
+/* ── Content Section Headers ── */
+.section-header-gold {
+  color: var(--color-gold, #D4A843);
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* ── Sidebar Active Accent ── */
+.sidebar-link.active {
+  background: rgba(212, 168, 67, 0.18);
+  color: #fff;
+  border: 1px solid rgba(212, 168, 67, 0.25);
+}
+
+/* ── Gold Border Focus Ring ── */
+.gold-focus:focus-visible {
+  outline: 2px solid var(--color-gold, #D4A843);
+  outline-offset: 2px;
+}
+
+/* ── Teal Accent Elements ── */
+.teal-accent {
+  color: var(--color-teal, #2EC4B6);
+}
+
+/* ── Pirate Card ── */
+.card-pirate {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+}
+.card-pirate:hover {
+  border-color: rgba(212, 168, 67, 0.3);
+  box-shadow: 0 0 20px rgba(212, 168, 67, 0.12);
+}
+
 .counter {
   font-size: 16px;
   padding: 5px 10px;

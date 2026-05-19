@@ -1,4 +1,4 @@
-// GET /api/trakt/auth — Generate PKCE params and return Trakt authorize URL
+// GET /api/trakt/auth — Generate anti-CSRF state and return Trakt authorize URL
 import { json, preflight, validateSession } from '../_shared.js';
 
 export function onRequestOptions() { return preflight(); }
@@ -10,31 +10,26 @@ export async function onRequestGet(context) {
   if (!session) return json({ error: 'Unauthorized' }, 401);
 
   const clientId = env.TRAKT_CLIENT_ID;
-  const redirectUri = env.TRAKT_REDIRECT_URI || 'https://www.blackflagstreams.link/api/trakt/callback';
+  // Use request origin so it works on preview domains too
+  const origin = new URL(request.url).origin;
+  const redirectUri = env.TRAKT_REDIRECT_URI || `${origin}/api/trakt/callback`;
+
+  console.log('[Trakt:Auth] DIAG — origin:', origin,
+    'TRAKT_REDIRECT_URI env:', env.TRAKT_REDIRECT_URI || '(unset)',
+    'resolved redirectUri:', redirectUri,
+    'TRAKT_CLIENT_ID set:', !!clientId);
 
   if (!clientId) return json({ error: 'Trakt client ID not configured' }, 500);
 
-  // Generate PKCE code_verifier (43-128 chars, URL-safe base64)
-  const verifierBytes = new Uint8Array(32);
-  crypto.getRandomValues(verifierBytes);
-  const codeVerifier = btoa(String.fromCharCode(...verifierBytes))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-
-  // code_challenge = SHA256(code_verifier) base64url
-  const hashBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(codeVerifier));
-  const codeChallenge = btoa(String.fromCharCode(...new Uint8Array(hashBytes)))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-
-  // Generate state (anti-CSRF)
+  // Generate state (anti-CSRF), store in KV for 10 minutes
   const stateBytes = new Uint8Array(16);
   crypto.getRandomValues(stateBytes);
   const state = btoa(String.fromCharCode(...stateBytes))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-  // Store verifier in KV, keyed by state, TTL 10 minutes
   await env.SYNC_KV.put(
     `trakt_pkce:${state}`,
-    JSON.stringify({ userId: session.userId, codeVerifier, created: Date.now() }),
+    JSON.stringify({ userId: session.userId, created: Date.now() }),
     { expirationTtl: 600 }
   );
 

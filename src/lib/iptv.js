@@ -35,9 +35,10 @@ export async function decryptCreds(enc) {
 
 // ── Xtream Codes API ──
 
-function proxyFetch(url, proxyUrl) {
-  if (!proxyUrl) return fetch(url);
-  return fetch(`${proxyUrl}?url=${encodeURIComponent(url)}`);
+function proxyFetch(url, proxyUrl, signal) {
+  const opts = signal ? { signal } : {};
+  if (!proxyUrl) return fetch(url, opts);
+  return fetch(`${proxyUrl}?url=${encodeURIComponent(url)}`, opts);
 }
 
 export async function xtreamLogin(server, username, password, proxyUrl = null) {
@@ -150,22 +151,50 @@ export function parseM3U(content) {
   return channels;
 }
 
+// ── Abortable xtream helpers (used by searchIPTVVOD) ──
+
+async function xtreamGetVODCategoriesAbortable(p, proxy, signal) {
+  const url = `${p._server}/player_api.php?username=${encodeURIComponent(p._username)}&password=${encodeURIComponent(p._password)}&action=get_vod_categories`;
+  const res = await proxyFetch(url, proxy, signal);
+  return res.json();
+}
+
+async function xtreamGetVODStreamsAbortable(p, catId, proxy, signal) {
+  const url = `${p._server}/player_api.php?username=${encodeURIComponent(p._username)}&password=${encodeURIComponent(p._password)}&action=get_vod_streams&category_id=${catId}`;
+  const res = await proxyFetch(url, proxy, signal);
+  return res.json();
+}
+
+async function xtreamGetSeriesCategoriesAbortable(p, proxy, signal) {
+  const url = `${p._server}/player_api.php?username=${encodeURIComponent(p._username)}&password=${encodeURIComponent(p._password)}&action=get_series_categories`;
+  const res = await proxyFetch(url, proxy, signal);
+  return res.json();
+}
+
+async function xtreamGetSeriesAbortable(p, catId, proxy, signal) {
+  const url = `${p._server}/player_api.php?username=${encodeURIComponent(p._username)}&password=${encodeURIComponent(p._password)}&action=get_series&category_id=${catId}`;
+  const res = await proxyFetch(url, proxy, signal);
+  return res.json();
+}
+
 // ── VOD Search across all IPTV providers ──
 
-export async function searchIPTVVOD(providers, title, year, type, corsProxy) {
+export async function searchIPTVVOD(providers, title, year, type, corsProxy, signal) {
   for (const provider of providers) {
     if (!provider._server) continue;
+    if (signal?.aborted) return null;
     try {
       const creds = provider._enc ? await decryptCreds(provider._enc) : null;
       const p = creds ? { ...provider, ...creds } : provider;
       if (!p._server || !p._username) continue;
 
       // Search VOD by title
-      const vodCats = await xtreamGetVODCategories(p);
+      const vodCats = await xtreamGetVODCategoriesAbortable(p, corsProxy, signal);
       const allVOD = [];
 
-      for (const cat of (vodCats || []).slice(0, 10)) {
-        const streams = await xtreamGetVODStreams(p, cat.category_id);
+      for (const cat of (vodCats || []).slice(0, 5)) {
+        if (signal?.aborted) return null;
+        const streams = await xtreamGetVODStreamsAbortable(p, cat.category_id, corsProxy, signal);
         if (streams) allVOD.push(...streams);
       }
 
@@ -194,10 +223,12 @@ export async function searchIPTVVOD(providers, title, year, type, corsProxy) {
       }
 
       // Search Series
-      const seriesCats = await xtreamGetSeriesCategories(p);
+      if (signal?.aborted) return null;
+      const seriesCats = await xtreamGetSeriesCategoriesAbortable(p, corsProxy, signal);
       const allSeries = [];
-      for (const cat of (seriesCats || []).slice(0, 10)) {
-        const list = await xtreamGetSeries(p, cat.category_id);
+      for (const cat of (seriesCats || []).slice(0, 5)) {
+        if (signal?.aborted) return null;
+        const list = await xtreamGetSeriesAbortable(p, cat.category_id, corsProxy, signal);
         if (list) allSeries.push(...list);
       }
 

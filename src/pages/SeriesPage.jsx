@@ -85,6 +85,19 @@ export default function SeriesPage() {
 
   const hasAnyFiltersActive = filters.genreIds.length > 0 || filters.minRating > 0 || !!filters.decade || filters.certs.length > 0;
 
+  if (!settings.effectiveTmdbKey) {
+    return (
+      <div className="page" style={{ paddingTop: '4rem', textAlign: 'center' }}>
+        <p style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>📺</p>
+        <h2 style={{ marginBottom: '0.5rem' }}>TMDB Key Required</h2>
+        <p style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
+          Ask your admin to set a global TMDB key, or add one in Settings.
+        </p>
+        <a href="/settings" className="btn btn-primary">Go to Settings</a>
+      </div>
+    );
+  }
+
   return (
     <div className="page" style={{ paddingTop: '1rem' }}>
       <div style={{ padding: '0 2rem', marginBottom: '1.5rem' }}>

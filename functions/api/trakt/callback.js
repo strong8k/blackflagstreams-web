@@ -9,6 +9,8 @@ export async function onRequestGet(context) {
   const code = url.searchParams.get('code');
   const state = url.searchParams.get('state');
 
+  console.log('[Trakt:Callback] Received callback — code:', !!code, 'state:', !!state, 'url:', url.pathname + url.search);
+
   if (!code || !state) {
     return new Response('<html><body><script>window.close();</script><p>Invalid callback. Close this window.</p></body></html>', {
       status: 400,
@@ -25,20 +27,20 @@ export async function onRequestGet(context) {
     });
   }
 
-  const { userId, codeVerifier } = JSON.parse(pkceRaw);
+  const { userId } = JSON.parse(pkceRaw);
 
+  // Use the same origin the auth page was served from
   const clientId = env.TRAKT_CLIENT_ID;
   const clientSecret = env.TRAKT_CLIENT_SECRET;
-  const redirectUri = env.TRAKT_REDIRECT_URI || 'https://www.blackflagstreams.link/api/trakt/callback';
+  const redirectUri = env.TRAKT_REDIRECT_URI || `${url.protocol}//${url.host}/api/trakt/callback`;
 
-  // Exchange code for tokens
+  // Exchange code for tokens (standard auth code flow — no PKCE, Trakt doesn't support it)
   const tokenBody = {
     code,
     client_id: clientId,
     client_secret: clientSecret,
     redirect_uri: redirectUri,
     grant_type: 'authorization_code',
-    code_verifier: codeVerifier,
   };
 
   try {
@@ -49,9 +51,9 @@ export async function onRequestGet(context) {
     });
 
     if (!tokenRes.ok) {
-      const errText = await tokenRes.text();
+      const errText = await tokenRes.text().catch(() => '');
       console.error('[Trakt] Token exchange failed:', tokenRes.status, errText);
-      return new Response(`<html><body><script>window.close();</script><p>Trakt authorization failed. Close this window and try again.</p></body></html>`, {
+      return new Response(`<html><body><script>window.close();</script><p>Trakt authorization failed (${tokenRes.status}): ${errText.slice(0, 300)}</p><p>Check TRAKT_CLIENT_ID/SECRET env vars and redirect URI config.</p></body></html>`, {
         status: 400,
         headers: { 'Content-Type': 'text/html' },
       });

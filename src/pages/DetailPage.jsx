@@ -4,6 +4,8 @@ import { motion } from 'framer-motion';
 import { getMovieDetails, getTVDetails, getExternalIds, img, getCachedStreams, setCachedStreams } from '../lib/tmdb';
 import { fetchAllStreams, classifyStream, getStreamTitle, buildPlayableUrl } from '../lib/addons';
 import { searchIPTVVOD } from '../lib/iptv';
+import { log } from '../lib/logger';
+import { getApiBaseUrl } from '../lib/auth';
 import { useStore } from '../lib/store';
 import ContentRow from '../components/ContentRow';
 import LogoSvg from '../assets/bfs.svg';
@@ -78,6 +80,7 @@ export default function DetailPage() {
   const [error, setError] = useState(null);
   const [activeFilter, setActiveFilter] = useState('All');
   const [iptvStream, setIptvStream] = useState(null);
+  const iptvAbortRef = React.useRef(null);
 
   const addons = useStore(s => s.addons);
   const activeProfile = useStore(s => s.activeProfile);
@@ -93,6 +96,8 @@ export default function DetailPage() {
   const inWatchlist = useMemo(() => isInWatchlist(Number(id), type), [id, type, watchlist]);
   const savedProgress = getProgress(Number(id), type);
   const tier = useStore(s => s.auth.tier);
+  const token = useStore(s => s.auth.token);
+  const services = useStore(s => s.services);
   const isPaid = ['premium', 'pro', 'ultra'].includes(tier);
 
   // Load details
@@ -108,15 +113,20 @@ export default function DetailPage() {
         if (extIds?.imdb_id) setImdbId(extIds.imdb_id);
         setLoading(false);
         
-        // Search IPTV VOD in parallel
-        const title = data.title || data.name;
-        const year = (data.release_date || data.first_air_date || '').substring(0, 4);
-        searchIPTVVOD(iptvProviders, title, year, type, settings.effectiveCorsProxy)
-          .then(result => { if (!cancelled && result) setIptvStream(result.stream); })
-          .catch(() => {});
+        // Search first IPTV provider for VOD match (aborts if user navigates away)
+        if (iptvProviders.length > 0) {
+          const title = data.title || data.name;
+          const year = (data.release_date || data.first_air_date || '').substring(0, 4);
+          const iptvAbort = new AbortController();
+          searchIPTVVOD([iptvProviders[0]], title, year, type, settings.effectiveCorsProxy, iptvAbort.signal)
+            .then(result => { if (!cancelled && result) setIptvStream(result.stream); })
+            .catch(() => {});
+          // Store abort ref so cleanup can cancel it
+          iptvAbortRef.current = iptvAbort;
+        }
       } catch (e) { if (!cancelled) { setError(e.message); setLoading(false); } }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; iptvAbortRef.current?.abort(); };
   }, [type, id]);
 
   // Auto-load streams for movies — wait until at least one addon has its manifest loaded
@@ -139,6 +149,7 @@ export default function DetailPage() {
     }
 
     const enabledAddons = addons.filter(a => a.enabled && a.manifest);
+    log('info', 'streams load start', { type, id: imdbId || id, addons: enabledAddons.length });
 
     const results = await fetchAllStreams(enabledAddons, type === 'tv' ? 'series' : 'movie', imdbId || id, id,
       (newStreams) => {
@@ -147,36 +158,45 @@ export default function DetailPage() {
           const seen = new Set();
           return combined.filter(s => {
             const key = s.url || s.infoHash || s.ytId || s.externalUrl || null;
-            if (!key) return true; // no dedup key, always include
+            if (!key) return true;
             if (seen.has(key)) return false;
             seen.add(key);
             return true;
           });
         });
       },
-      settings.effectiveCorsProxy
+      settings.effectiveCorsProxy,
+      { token, services, baseUrl: getApiBaseUrl() || '' }
     );
 
-    const sorted = [...results].sort((a, b) => {
-      const aTB = isTorBox(a) ? -1 : 0;
-      const bTB = isTorBox(b) ? -1 : 0;
-      if (aTB !== bTB) return aTB - bTB;
-      const ai = enabledAddons.findIndex(ad => ad.manifest?.id === a._addonId);
-      const bi = enabledAddons.findIndex(ad => ad.manifest?.id === b._addonId);
-      if (ai !== bi) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
-      const qDiff = qualityRank(a) - qualityRank(b);
-      if (qDiff !== 0) return qDiff;
-      return parseFileSize(b) - parseFileSize(a);
+    // `fetchAllStreams` already sorts _isTorbox → _isDebrid → addons + limits 20/source.
+    // Don't double-sort — respect the backend priority order.
+    // Only apply quality fallback within same-priority tiers.
+    const sorted = [...results];
+    // Stability check: if equal priority, prefer higher quality
+    sorted.sort((a, b) => {
+      if (a._isTorbox !== b._isTorbox) return a._isTorbox ? -1 : 1;
+      if (a._isDebrid !== b._isDebrid) return a._isDebrid ? -1 : 1;
+      return qualityRank(a) - qualityRank(b);
     });
 
     setStreams(sorted);
     setStreamsLoading(false);
-    // Cache for 2 hours
     setCachedStreams(type, imdbId || id, sorted);
-    if (results.length === 0) addToast('No streams found. Try installing addons.', 'warning');
+    log('info', 'streams load done', { total: results.length, byAddon: Object.fromEntries(
+      [...new Set(results.map(s => s._addonName || 'unknown'))].map(n => [n, results.filter(s => (s._addonName || 'unknown') === n).length])
+    )});
+    if (results.length === 0) {
+      const hasDebrid = services?.torbox?.connected || services?.realdebrid?.connected || services?.alldebrid?.connected;
+      if (hasDebrid) {
+        addToast('No cached results found. The content may not be available on your debrid service, or it hasn\'t been cached yet.', 'warning');
+      } else {
+        addToast('No streams available. Connect a debrid service to access cached content.', 'warning');
+      }
+    }
   };
 
-  const handleStreamPlay = (stream, resume = false) => {
+  const handleStreamPlay = async (stream, resume = false) => {
     const cls = classifyStream(stream);
     const streamTitle = detail?.title || detail?.name || 'Stream';
     const baseParams = { title: streamTitle, id: String(id), type };
@@ -187,16 +207,45 @@ export default function DetailPage() {
     if (cls === 'youtube') { window.open(`https://www.youtube.com/watch?v=${stream.ytId}`, '_blank'); return; }
 
     if (cls === 'needs-debrid') {
-      const p = new URLSearchParams({ ...baseParams, infoHash: stream.infoHash });
-      if (stream.fileIdx !== undefined) p.set('fileIdx', stream.fileIdx);
+      // infoHash-only stream — try debrid resolve first, then proxy, then give up
+      const hasDebrid = services?.torbox?.connected || services?.realdebrid?.connected || services?.alldebrid?.connected;
+      const resolveParams = {
+        resolve: hasDebrid ? 'debrid' : 'proxy',
+        infoHash: stream.infoHash,
+        imdbId,
+        resolveName: stream.title || stream.name || '',
+        resolveProxy: settings.effectiveCorsProxy,
+        logo: stream._addonLogo || '',
+      };
+      const p = new URLSearchParams({
+        ...baseParams,
+        // No direct URL; PlayerPage will resolve
+        url: '',
+        ...resolveParams,
+      });
       navigate(`/player?${p.toString()}`);
       return;
     }
-    const url = buildPlayableUrl(stream, settings.effectiveCorsProxy);
-    if (url) {
-      const p = new URLSearchParams({ ...baseParams, url });
-      navigate(`/player?${p.toString()}`);
+    let url = buildPlayableUrl(stream, settings.effectiveCorsProxy);
+    if (!url) {
+      addToast('Could not build a playable URL for this stream.', 'error');
+      return;
     }
+    // Extract-style URLs (e.g. WebStreamrMBG /extract/ endpoints) return JSON with the real URL.
+    if (stream.url?.includes('/extract/')) {
+      try {
+        const proxyBase = settings.effectiveCorsProxy;
+        const extractUrl = proxyBase ? `${proxyBase}?url=${encodeURIComponent(stream.url)}` : stream.url;
+        const res = await fetch(extractUrl, { headers: { Accept: 'application/json' } });
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.url) url = data.url;
+        }
+      } catch {}
+    }
+    log('info', 'stream play', { addon: stream._addonName, title: stream.title || stream.name });
+    const p = new URLSearchParams({ ...baseParams, url });
+    navigate(`/player?${p.toString()}`);
   };
 
   const handleWatchlist = () => {
@@ -362,10 +411,15 @@ export default function DetailPage() {
             </div>
 
             {streamsLoading && streams.length === 0 ? (
-              <div className="streams-skeleton">
-                {[1, 2, 3, 4].map(n => (
-                  <div key={n} className="skeleton" style={{ height: 48, borderRadius: 'var(--radius-sm)', opacity: 1 - n * 0.15 }} />
-                ))}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '3rem 1rem', gap: '1rem' }}>
+                <div style={{ width: '48px', height: '48px', border: '4px solid rgba(99, 102, 241, 0.15)', borderTopColor: '#6366f1', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                <p style={{ color: '#a5b4fc', fontSize: '1rem', fontWeight: 600, textAlign: 'center' }}>
+                  ⚡ Scouring the high seas for streams...
+                </p>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                  Checking debrid cache & addons
+                </p>
+                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
               </div>
             ) : (
               <div className="stream-groups">

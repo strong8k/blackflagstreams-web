@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import Hls from 'hls.js';
 import { useStore } from '../lib/store';
-import { img, getNextEpisode, getTVDetails, getSeasonDetails } from '../lib/tmdb';
+import { img, getTmdbImages, getNextEpisode, getTVDetails, getSeasonDetails } from '../lib/tmdb';
 import { VERSION } from '../lib/version';
 import './PlayerPage.css';
 
@@ -59,20 +59,103 @@ export default function PlayerPage() {
   const season = params.get('season');
   const episode = params.get('episode');
   const resume = params.get('resume') === '1';
+  // Needs-debrid resolve params (passed from DetailPage/EpisodePage)
+  const resolveMode = params.get('resolve'); // 'debrid' | 'proxy'
+  const infoHash = params.get('infoHash');
+  const imdbId = params.get('imdbId');
+  const resolveName = params.get('resolveName');
+  const resolveProxy = params.get('resolveProxy');
+  const [resolving, setResolving] = useState(resolveMode || null);
+  const [resolvedUrl, setResolvedUrl] = useState(null);
+  const [tmdbLogoPath, setTmdbLogoPath] = useState(null);
 
   const updateProgress = useStore(s => s.updateProgress);
   const getProgress = useStore(s => s.getProgress);
   const addToast = useStore(s => s.addToast);
   const savedProgress = id ? getProgress(Number(id), type) : null;
+  const token = useStore(s => s.auth.token);
+
+  // Resolve debrid/proxy URL before playing (needs-debrid stream)
+  const effectiveUrl = resolvedUrl || url;
 
   useEffect(() => {
-    if (!url) { setError('No stream URL provided'); return; }
+    if (!resolveMode || !infoHash) return;
+    let cancelled = false;
+    const fallbackProxy = () => {
+      if (!resolveProxy || !infoHash) { setError('No proxy configured.'); return; }
+      const magnetUrl = `magnet:?xt=urn:btih:${infoHash}${resolveName ? `&dn=${encodeURIComponent(resolveName)}` : ''}`;
+      try {
+        const proxyUrl = new URL(resolveProxy);
+        proxyUrl.searchParams.set('url', magnetUrl);
+        setResolvedUrl(proxyUrl.toString());
+        setResolving(null);
+      } catch { setError('Invalid proxy URL.'); }
+    };
+    (async () => {
+      if (resolveMode === 'debrid') {
+        setResolving('Adding torrent to your debrid service...');
+        try {
+          const apiBase = location.origin;
+          const res = await fetch(`${apiBase}/api/torrent/resolve`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ infoHash, name: resolveName || title, imdbId }),
+          });
+          const data = await res.json();
+          if (cancelled) return;
+          if (data.url) {
+            setResolvedUrl(data.url);
+            setResolving(null);
+          } else if (data.queuing) {
+            setResolving('Torrent is still queuing — retrying...');
+            setTimeout(async () => {
+              if (cancelled) return;
+              try {
+                const retryRes = await fetch(`${apiBase}/api/torrent/resolve`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                  body: JSON.stringify({ infoHash, name: resolveName || title, imdbId }),
+                });
+                const retryData = await retryRes.json();
+                if (cancelled) return;
+                if (retryData.url) { setResolvedUrl(retryData.url); setResolving(null); }
+                else if (resolveProxy) { setResolving('Torrent not cached — trying CORS proxy...'); fallbackProxy(); }
+                else setError('Torrent not cached on any debrid service. Add a debrid key in Settings.');
+              } catch { setError('Debrid resolve failed. Check console.'); }
+            }, 3000);
+          } else { setError(data.error || 'Debrid resolve failed.'); }
+        } catch { if (!cancelled) setError('Debrid resolve failed. Check network.'); }
+      } else if (resolveMode === 'proxy' && resolveProxy) {
+        setResolving('Resolving via CORS proxy...');
+        fallbackProxy();
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [resolveMode]);
+
+  // Fetch TMDB logo for the resolve overlay
+  useEffect(() => {
+    if (type && id && !tmdbLogoPath) {
+      getTmdbImages(type, id).then(images => {
+        if (images?.logoPath) {
+          setTmdbLogoPath(images.logoPath);
+        }
+      }).catch(() => {});
+    }
+  }, [type, id]);
+
+  useEffect(() => {
+    if (resolving) return; // wait for debrid/proxy resolve
+    if (!effectiveUrl) {
+      if (!resolveMode) setError('No stream URL provided');
+      return;
+    }
     const video = videoRef.current;
     if (!video) return;
     let hls = null;
-    if (Hls.isSupported() && (url.includes('m3u8') || url.endsWith('.m3u8'))) {
+    if (Hls.isSupported() && (effectiveUrl.includes('m3u8') || effectiveUrl.endsWith('.m3u8'))) {
       hls = new Hls({ enableWorker: true, lowLatencyMode: false });
-      hls.loadSource(url);
+      hls.loadSource(effectiveUrl);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
         setQualityLevels(data.levels || []);
@@ -90,7 +173,7 @@ export default function PlayerPage() {
       });
       hlsRef.current = hls;
     } else {
-      video.src = url;
+      video.src = effectiveUrl;
       video.play().catch(() => {});
       if (resume && savedProgress?.progress) video.currentTime = savedProgress.progress;
     }
@@ -98,7 +181,7 @@ export default function PlayerPage() {
       getNextEpisode(id, season, episode).then(r => setNextEpInfo(r)).catch(() => {});
     }
     return () => { if (hls) hls.destroy(); };
-  }, [url]);
+  }, [effectiveUrl, resolving]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -200,14 +283,12 @@ export default function PlayerPage() {
       const detail = await getTVDetails(Number(id));
       const seasons = detail.seasons?.filter(s => s.season_number > 0) || [];
       setTvSeasons(seasons);
-      // Pre-fetch current season details
       const currentSeasonNum = Number(season) || seasons[0]?.season_number || 1;
       const sData = await getSeasonDetails(Number(id), currentSeasonNum);
       setSeasonDetailMap(prev => ({ ...prev, [currentSeasonNum]: sData.episodes || [] }));
     } catch { setTvSeasons([]); }
     setEpisodePanelLoading(false);
   };
-
   const handleSeasonExpand = async (sNum) => {
     if (seasonDetailMap[sNum]) return;
     try {
@@ -215,9 +296,8 @@ export default function PlayerPage() {
       setSeasonDetailMap(prev => ({ ...prev, [sNum]: sData.episodes || [] }));
     } catch {}
   };
-
   const handleEpisodeSelect = (sNum, epNum, epName) => {
-    const epTitle = epName ? `${seriesName || title} - S${sNum}E${epNum} - ${epName}` : title;
+    const epTitle = epName ? `${title} - S${sNum}E${epNum} - ${epName}` : title;
     setShowEpisodePanel(false);
     navigate(`/player?url=${encodeURIComponent(url || '')}&title=${encodeURIComponent(epTitle)}&poster=${encodeURIComponent(poster || '')}&type=tv&id=${id}&season=${sNum}&episode=${epNum}`);
   };
@@ -248,9 +328,42 @@ export default function PlayerPage() {
     );
   }
 
+  const logoUrl = tmdbLogoPath ? img.logo(tmdbLogoPath) : null;
+
   return (
-    <div
-      className={`player-container${controlsVisible ? '' : ' controls-hidden'}`}
+    <>
+      {/* Resolving overlay — poster bg + pulsing logo + loading sweep + status */}
+      {resolving && (
+        <div className="player-resolving-overlay"
+          style={poster ? {
+            backgroundImage: `url(${img.poster(poster, 'w500')})`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+          } : {}}
+        >
+          <div className="player-resolving-bg" />
+          <div className="player-resolving-content">
+            {logoUrl ? (
+              <img src={logoUrl} alt={title}
+                className="player-resolving-logo"
+              />
+            ) : (
+              <div className="player-resolving-logo-fallback"
+              >{title.charAt(0)}</div>
+            )}
+            <div className="player-resolving-loader-track">
+              <div className="player-resolving-loader-fill" />
+            </div>
+            <div>
+              <p className="player-resolving-msg">⚡ {resolving}</p>
+              <p className="player-resolving-sub">This may take a few moments while the torrent is fetched</p>
+            </div>
+            <button className="btn btn-secondary btn-sm" onClick={() => navigate(-1)}>← Back</button>
+          </div>
+        </div>
+      )}
+      <div
+        className={`player-container${controlsVisible ? '' : ' controls-hidden'}`}
       ref={containerRef}
       onMouseMove={showControlsFn}
       onTouchStart={showControlsFn}
@@ -525,5 +638,6 @@ export default function PlayerPage() {
         </>
       )}
     </div>
+    </>
   );
 }

@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useStore } from '../lib/store';
-import { requestAdminOtp, verifyAdminOtp } from '../lib/auth';
+import { requestAdminOtp, verifyAdminOtp, getApiBaseUrl } from '../lib/auth';
 import { VERSION } from '../lib/version';
 import './AdminPage.css';
 
@@ -123,9 +123,14 @@ function AdminLogin({ onAuth }) {
 
 // ── Admin Shell ──
 export default function AdminPage() {
-  const [adminSession, setAdminSession] = useState(null);
+  const [adminSession, setAdminSession] = useState(() => localStorage.getItem('bfs_admin_session'));
   const [view, setView] = useState('dashboard');
   const addToast = useStore(s => s.addToast);
+
+  useEffect(() => {
+    if (adminSession) localStorage.setItem('bfs_admin_session', adminSession);
+    else localStorage.removeItem('bfs_admin_session');
+  }, [adminSession]);
 
   if (!adminSession) {
     return <AdminLogin onAuth={(session) => setAdminSession(session)} />;
@@ -133,7 +138,7 @@ export default function AdminPage() {
 
   return (
     <div className="admin-page page container">
-      <header className="admin-header">
+      <header className="admin-header" style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-page, #0a0a0f)', paddingBottom: '0.5rem' }}>
         <h1 className="section-title">⚓ Ops Console <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 400 }}>{VERSION}</span></h1>
         <nav className="admin-nav">
           {['dashboard', 'users', 'addons', 'config', 'danger'].map(v => (
@@ -167,14 +172,12 @@ function DashboardView({ adminSession }) {
   const [loading, setLoading] = useState(true);
 
   React.useEffect(() => {
-    import('../lib/auth').then(({ getApiBaseUrl }) => {
-      fetch(`${getApiBaseUrl()}/api/admin/stats`, {
-        headers: { 'X-Admin-Session': adminSession },
-      })
-        .then(r => r.ok ? r.json() : null)
-        .then(data => { setStats(data); setLoading(false); })
-        .catch(e => { ERR('stats fetch:', e.message); setLoading(false); });
-    });
+    fetch(`${getApiBaseUrl()}/api/admin/stats`, {
+      headers: { 'X-Admin-Session': adminSession },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { setStats(data); setLoading(false); })
+      .catch(e => { ERR('stats fetch:', e.message); setLoading(false); });
   }, [adminSession]);
 
   return (
@@ -223,14 +226,12 @@ function UsersView({ adminSession }) {
   const addToast = useStore(s => s.addToast);
 
   React.useEffect(() => {
-    import('../lib/auth').then(({ getApiBaseUrl }) => {
-      fetch(`${getApiBaseUrl()}/api/admin/users?q=${encodeURIComponent(search)}`, {
-        headers: { 'X-Admin-Session': adminSession },
-      })
-        .then(r => r.ok ? r.json() : { users: [] })
-        .then(data => { setUsers(data.users || []); setLoading(false); })
-        .catch(e => { ERR('users fetch:', e.message); setLoading(false); });
-    });
+    fetch(`${getApiBaseUrl()}/api/admin/users?q=${encodeURIComponent(search)}`, {
+      headers: { 'X-Admin-Session': adminSession },
+    })
+      .then(r => r.ok ? r.json() : { users: [] })
+      .then(data => { setUsers(data.users || []); setLoading(false); })
+      .catch(e => { ERR('users fetch:', e.message); setLoading(false); });
   }, [adminSession, search]);
 
   const openEdit = (user) => {
@@ -244,6 +245,7 @@ function UsersView({ adminSession }) {
       newPassword: '',
       billingPrice: user.billingPrice || '',
       sendPasswordEmail: true,
+      clearDevices: false,
     });
   };
 
@@ -251,7 +253,6 @@ function UsersView({ adminSession }) {
     e.preventDefault();
     setSaving(true);
     try {
-      const { getApiBaseUrl } = await import('../lib/auth');
       const res = await fetch(`${getApiBaseUrl()}/api/admin/users`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Admin-Session': adminSession },
@@ -390,6 +391,35 @@ function UsersView({ adminSession }) {
                 <label htmlFor="adm-banned" style={{ cursor: 'pointer', margin: 0 }}>Banned <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(walk the plank)</span></label>
               </div>
 
+              <hr style={{ border: 'none', borderTop: '1px solid var(--border-subtle)', margin: '0.75rem 0' }} />
+
+              <div className="form-group">
+                <label>Registered Devices ({(editingUser.devices || []).length})</label>
+                {(editingUser.devices || []).length === 0 ? (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '0.25rem' }}>No devices registered.</p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.4rem' }}>
+                    {(editingUser.devices || []).map(d => (
+                      <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.4rem 0.75rem', background: 'rgba(255,255,255,0.04)', borderRadius: '6px', fontSize: '0.8rem' }}>
+                        <div>
+                          <span style={{ color: 'var(--text-primary)' }}>{d.name || 'Device'}</span>
+                          <span style={{ color: 'var(--text-muted)', marginLeft: '0.5rem' }}>
+                            {d.userAgent?.slice(0, 50)} · Last seen {d.lastSeen ? new Date(d.lastSeen).toLocaleDateString() : '—'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.6rem' }}>
+                  <input type="checkbox" id="adm-clear-devices" checked={editForm.clearDevices}
+                    onChange={e => setEditForm(f => ({ ...f, clearDevices: e.target.checked }))} />
+                  <label htmlFor="adm-clear-devices" style={{ cursor: 'pointer', margin: 0, color: '#f87171', fontSize: '0.85rem' }}>
+                    Clear all devices on save <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>(user must log in again on each device)</span>
+                  </label>
+                </div>
+              </div>
+
               <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
                 <button type="button" className="btn btn-secondary" onClick={() => setEditingUser(null)}>Cancel</button>
                 <button type="submit" className="btn btn-primary" disabled={saving}>
@@ -417,7 +447,6 @@ function AddonsView({ adminSession }) {
   const load = React.useCallback(async () => {
     setLoading(true);
     try {
-      const { getApiBaseUrl } = await import('../lib/auth');
       const base = getApiBaseUrl();
       const headers = { 'X-Admin-Session': adminSession };
       const [gRes, rRes] = await Promise.all([
@@ -437,7 +466,6 @@ function AddonsView({ adminSession }) {
     if (!addForm.url.trim() || !addForm.name.trim()) return;
     setAdding(true);
     try {
-      const { getApiBaseUrl } = await import('../lib/auth');
       const res = await fetch(`${getApiBaseUrl()}/api/admin/addons`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Admin-Session': adminSession },
@@ -457,7 +485,6 @@ function AddonsView({ adminSession }) {
 
   const handleDelete = async (type, id) => {
     try {
-      const { getApiBaseUrl } = await import('../lib/auth');
       const res = await fetch(`${getApiBaseUrl()}/api/admin/addons`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json', 'X-Admin-Session': adminSession },
@@ -581,7 +608,6 @@ function ConfigView({ adminSession }) {
     e.preventDefault();
     setSaving(true);
     try {
-      const { getApiBaseUrl } = await import('../lib/auth');
       const res = await fetch(`${getApiBaseUrl()}/api/admin/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Admin-Session': adminSession },
@@ -634,7 +660,6 @@ function DangerView({ adminSession }) {
     if (confirming !== action) { setConfirming(action); return; }
     setConfirming(null);
     try {
-      const { getApiBaseUrl } = await import('../lib/auth');
       const res = await fetch(`${getApiBaseUrl()}/api/admin/danger`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Admin-Session': adminSession },

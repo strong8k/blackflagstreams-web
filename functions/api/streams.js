@@ -184,6 +184,7 @@ async function resolveProvider(provider, type, imdbId, season, episode) {
         name: `BFS · ${provider.name}`,
         title: 'Direct Stream',
         url: streamUrl,
+        behaviorHints: { notWebReady: true },
       };
     }
   } catch { /* extraction failed — use fallback */ }

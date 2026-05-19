@@ -1,5 +1,7 @@
 // POST /api/realdebrid/auth — Validate and store Real-Debrid API key
+// Stores key in both legacy KV and aiostreams user data.
 import { json, preflight, validateSession } from '../_shared.js';
+import { setUserDebridKey } from '../aiostreams/_userdata.js';
 
 export function onRequestOptions() { return preflight(); }
 
@@ -23,6 +25,7 @@ export async function onRequestPost(context) {
       return json({ error: data?.error || 'Invalid Real-Debrid API key' }, 401);
     }
 
+    // Store in legacy KV (for backward compat during migration)
     await env.SYNC_KV.put(`service:realdebrid:${session.userId}`, JSON.stringify({
       access_token: apiKey,
       connected: true,
@@ -31,6 +34,13 @@ export async function onRequestPost(context) {
       expiresAt: data.expiration || null,
       created: Date.now(),
     }));
+
+    // Sync AIOStreams config with new key (best-effort — key is already saved in KV)
+    try {
+      await setUserDebridKey(env, session.userId, 'realdebrid', apiKey);
+    } catch (e) {
+      console.error('[BFS:AIO] realdebrid syncUser error:', e.message);
+    }
 
     return json({
       connected: true,

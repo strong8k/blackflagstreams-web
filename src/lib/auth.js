@@ -14,8 +14,6 @@ const WARN = (...args) => console.warn('[BFS:Auth]', ...args);
 const ERR = (...args) => console.error('[BFS:Auth]', ...args);
 
 export function getApiBaseUrl() {
-  const override = localStorage.getItem('bfs_api_base');
-  if (override) { LOG('Using override API base:', override); return override; }
   return API_BASE;
 }
 
@@ -52,16 +50,6 @@ export function getUserTier() {
   return user?.tier || 'free';
 }
 
-export function getTierLimits(tier) {
-  const limits = {
-    free:     { profiles: 1, addons: 5,  iptvProviders: 0, iptvChannels: 0, sync: false },
-    account:  { profiles: 2, addons: Infinity, iptvProviders: 1, iptvChannels: 100, sync: true },
-    premium:  { profiles: 4, addons: Infinity, iptvProviders: 1, iptvChannels: Infinity, sync: true },
-    pro:      { profiles: 6, addons: Infinity, iptvProviders: 5, iptvChannels: Infinity, sync: true },
-    ultra:    { profiles: 10, addons: Infinity, iptvProviders: Infinity, iptvChannels: Infinity, sync: true },
-  };
-  return limits[tier] || limits.free;
-}
 
 export async function checkSession() {
   const token = getToken();
@@ -187,7 +175,7 @@ export async function pullSyncData() {
   if (!token) return null;
   LOG('pullSyncData: fetching...');
   try {
-    const res = await fetch(`${getApiBaseUrl()}/api/sync?action=pull&token=${encodeURIComponent(token)}`, {
+    const res = await fetch(`${getApiBaseUrl()}/api/sync?action=pull`, {
       headers: { 'Authorization': `Bearer ${token}` },
     });
     if (!res.ok) { WARN('pullSyncData: status', res.status); return null; }
@@ -207,7 +195,7 @@ export function debouncedPush(data) {
       const res = await fetch(`${getApiBaseUrl()}/api/sync?action=push`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ ...data, token }),
+        body: JSON.stringify(data),
       });
       if (!res.ok) WARN('debouncedPush: status', res.status);
       else LOG('debouncedPush: ok');

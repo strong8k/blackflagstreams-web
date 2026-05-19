@@ -29,9 +29,19 @@ function getInitialSettings() {
 // ── Profile presets ──
 
 const DEFAULT_PROFILES = [
-  { id: 1, name: 'Adult', avatar: '👤', color: '#3b82f6' },
-  { id: 2, name: 'Kids', avatar: '🧒', color: '#10b981' },
+  { id: '1', name: 'Adult', avatar: '🏴‍☠️', color: '#3b82f6' },
+  { id: '2', name: 'Kids', avatar: '🧒', color: '#10b981' },
 ];
+
+// ── Profile sync helper — call forceSync after profile mutations ──
+function syncProfilesAfterChange(get) {
+  // Debounce: wait 500ms then push
+  clearTimeout(get()._profileSyncTimer);
+  const timer = setTimeout(() => {
+    get().forceSync().catch(() => {});
+  }, 500);
+  set((s) => ({ _profileSyncTimer: timer }));
+}
 
 // ── Store ──
 
@@ -74,27 +84,35 @@ const useStore = create(
         // ── Profiles ──
         profiles: DEFAULT_PROFILES,
         activeProfile: DEFAULT_PROFILES[0],
+        _profileSyncTimer: null,
         setActiveProfile: (profile) =>
           set((s) => {
             const p = typeof profile === 'function' ? profile(s.profiles, s.activeProfile) : profile;
             if (p) localStorage.setItem('bfs_active_profile', JSON.stringify(p));
+            // Sync profiles to server
+            syncProfilesAfterChange(get);
             return { activeProfile: p };
           }),
         addProfile: (data) =>
           set((s) => {
-            const id = s.profiles.length > 0 ? Math.max(...s.profiles.map((p) => p.id)) + 1 : 1;
+            const id = s.profiles.length > 0 ? String(Math.max(...s.profiles.map((p) => Number(p.id) || 0)) + 1) : '1';
             const newProfile = { ...data, id };
+            syncProfilesAfterChange(get);
             return { profiles: [...s.profiles, newProfile] };
           }),
         updateProfile: (id, data) =>
-          set((s) => ({
-            profiles: s.profiles.map((p) => (p.id === id ? { ...p, ...data } : p)),
-            activeProfile: s.activeProfile?.id === id ? { ...s.activeProfile, ...data } : s.activeProfile,
-          })),
+          set((s) => {
+            syncProfilesAfterChange(get);
+            return {
+              profiles: s.profiles.map((p) => (String(p.id) === String(id) ? { ...p, ...data } : p)),
+              activeProfile: String(s.activeProfile?.id) === String(id) ? { ...s.activeProfile, ...data } : s.activeProfile,
+            };
+          }),
         removeProfile: (id) =>
           set((s) => {
-            const next = s.profiles.filter((p) => p.id !== id);
-            const newActive = next.find((p) => p.id === s.activeProfile?.id) || next[0] || null;
+            const next = s.profiles.filter((p) => String(p.id) !== String(id));
+            const newActive = next.find((p) => String(p.id) === String(s.activeProfile?.id)) || next[0] || null;
+            syncProfilesAfterChange(get);
             return { profiles: next, activeProfile: newActive };
           }),
 
@@ -150,6 +168,51 @@ const useStore = create(
           rpdb: { connected: false, tier: null },
         },
 
+        // ── Debrid Settings (AIOStreams quality preferences) ──
+        debridSettings: {
+          hasDebrid: false,
+          enabledResolutions: ['2160p', '1080p', '720p', '480p'],
+          languages: {
+            included: ['English', 'Dual Audio', 'Dubbed', 'Multi', 'Unknown'],
+            preferred: ['English', 'Dubbed', 'Dual Audio'],
+            required: ['English'],
+          },
+          sizeGlobal: {
+            movies: [1300000000, 100000000000],
+            series: [200000000, 15000000000],
+          },
+        },
+        setDebridSettings: (settings) =>
+          set((s) => ({ debridSettings: { ...s.debridSettings, ...settings } })),
+        setDebridResolution: (resolution, enabled) =>
+          set((s) => ({
+            debridSettings: {
+              ...s.debridSettings,
+              enabledResolutions: enabled
+                ? [...new Set([...s.debridSettings.enabledResolutions, resolution])]
+                : s.debridSettings.enabledResolutions.filter(r => r !== resolution),
+            },
+          })),
+        setHasDebrid: (has) =>
+          set((s) => ({ debridSettings: { ...s.debridSettings, hasDebrid: has } })),
+        initDebridSettings: async () => {
+          try {
+            const { getDebridSettings } = await import('./services');
+            const data = await getDebridSettings();
+            if (data.settings) {
+              set((s) => ({
+                debridSettings: {
+                  ...s.debridSettings,
+                  hasDebrid: data.hasDebrid,
+                  enabledResolutions: data.settings.enabledResolutions,
+                  languages: data.settings.languages,
+                  sizeGlobal: data.settings.sizeGlobal,
+                },
+              }));
+            }
+          } catch {}
+        },
+
         setServiceStatus: (key, data) =>
           set((s) => ({
             services: { ...s.services, [key]: { ...s.services[key], ...data } },
@@ -183,7 +246,7 @@ const useStore = create(
             { key: 'alldebrid', path: 'alldebrid' },
             { key: 'rpdb', path: 'rpdb' },
           ];
-          for (const { key, path } of svcKeys) {
+          await Promise.allSettled(svcKeys.map(async ({ key, path }) => {
             try {
               const res = await fetch(`${baseUrl}/api/${path}/status`, {
                 headers: { Authorization: `Bearer ${token}` },
@@ -206,13 +269,18 @@ const useStore = create(
                 }
               }
             } catch (e) { log('warn', `service status error: ${key}`, e.message); }
-          }
+          }));
         },
 
-        // ── TMDB Key (legacy setter kept for compatibility) ──
+        // ── TMDB Key ──
         setTmdbKey: (k) => {
-          if (!k) { localStorage.removeItem('bfs_user_tmdb_key'); }
-          set((s) => ({ settings: { ...s.settings } }));
+          if (k) {
+            localStorage.setItem('bfs_tmdb_key', k);
+          } else {
+            localStorage.removeItem('bfs_tmdb_key');
+            localStorage.removeItem('bfs_user_tmdb_key');
+          }
+          set((s) => ({ settings: { ...s.settings, effectiveTmdbKey: k || '' } }));
         },
 
         setCorsProxy: (u) => {
@@ -298,16 +366,6 @@ const useStore = create(
           const state = get();
           return (state.watchlist || []).some((i) => i.id === id && (!type || i.type === type));
         },
-        loadWatchlist: () => {
-          try {
-            const raw = localStorage.getItem('bfs_watchlist');
-            if (raw) {
-              const parsed = JSON.parse(raw);
-              if (Array.isArray(parsed)) set((s) => ({ watchlist: parsed }));
-            }
-          } catch {}
-        },
-
         // ── Continue Watching ──
         continueWatching: [],
         addContinueWatching: (item) =>
@@ -371,13 +429,15 @@ const useStore = create(
         removeAddon: (url) => {
           log('info', 'addon removed', { url });
           set((s) => ({
-            addons: s.addons.filter((a) => a.url !== url),
+            addons: s.addons.filter((a) => a.url !== url && a.transportUrl !== url),
           }));
+          get().forceSync().catch(() => {});
         },
         addAddon: async (transportUrl) => {
           try {
             const { fetchManifest } = await import('../lib/addons');
-            const manifest = await fetchManifest(transportUrl);
+            const proxy = get().settings?.effectiveCorsProxy || null;
+            const manifest = await fetchManifest(transportUrl, proxy);
             set((s) => {
               if (s.addons.some((a) => a.url === transportUrl || a.transportUrl === transportUrl)) return s;
               return {
@@ -385,6 +445,7 @@ const useStore = create(
               };
             });
             log('info', 'addon added', { name: manifest?.name, url: transportUrl });
+            get().forceSync().catch(() => {});
             return manifest;
           } catch (e) {
             log('error', 'addon add failed', { url: transportUrl, error: e.message });
@@ -409,7 +470,7 @@ const useStore = create(
             const token = state?.auth?.token;
             if (!token) throw new Error('Not authenticated');
             const baseUrl = getApiBaseUrl() || '';
-            log('info', 'sync push start', { addons: state.addons.length });
+            log('info', 'sync push start', { addons: state.addons.length, profiles: state.profiles?.length });
             const res = await fetch(`${baseUrl}/api/sync?action=push`, {
               method: 'POST',
               headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -418,6 +479,8 @@ const useStore = create(
                 iptvProviders: state.iptvProviders,
                 watchlist: state.watchlist,
                 continueWatching: state.continueWatching,
+                profiles: state.profiles,
+                activeProfileId: state.activeProfile?.id != null ? String(state.activeProfile.id) : null,
               }),
             });
             if (!res.ok) throw new Error(`Sync failed: ${res.status}`);
@@ -474,6 +537,70 @@ const useStore = create(
           return newItems.length;
         },
 
+        // ── Merge Stremio Library ──
+        mergeStremioLibrary: (data) => {
+          if (!data) return { movies: 0, series: 0, episodes: 0 };
+          const wl = data.watchlist || [];
+          const hist = data.history || [];
+          const state = get();
+          const existingWl = state.watchlist || [];
+          const existingHist = state.history || [];
+          const wlIds = new Set(existingWl.map((i) => i.id));
+          const histIds = new Set(existingHist.map((i) => i.id));
+
+          const newWl = wl.filter((item) => !wlIds.has(item.id));
+          const newHist = hist.filter((item) => !histIds.has(item.id));
+
+          // Count by type
+          let movies = 0, series = 0, episodes = 0;
+
+          for (const item of newWl) {
+            if (item.type === 'series') series++;
+            else movies++;
+          }
+
+          for (const item of newHist) {
+            if (item.type === 'series') {
+              if (item.season && item.episode) episodes++;
+              else series++;
+            } else {
+              movies++;
+            }
+          }
+
+          // Merge watchlist
+          if (newWl.length > 0) {
+            set((s) => ({ watchlist: [...newWl, ...s.watchlist] }));
+          }
+
+          // Merge history
+          if (newHist.length > 0) {
+            set((s) => ({
+              history: [...newHist.map((item) => ({
+                ...item,
+                id: item.tmdbId || item.id,
+                progress: item.watched ? 100 : 0,
+                timestamp: item.timestamp || Date.now(),
+              })), ...s.history],
+            }));
+          }
+
+          // Store watched episode state in sessionStorage for SeasonPage checkmarks
+          for (const item of [...newWl, ...newHist]) {
+            if (item.type === 'series' && item.season && item.episode && item.watched) {
+              try {
+                const key = `bfs_watched_tv_${item.id}_s${item.season}`;
+                const raw = sessionStorage.getItem(key);
+                const existing = raw ? JSON.parse(raw) : {};
+                existing[String(item.episode)] = true;
+                sessionStorage.setItem(key, JSON.stringify(existing));
+              } catch {}
+            }
+          }
+
+          return { movies, series, episodes };
+        },
+
         // ── Init helpers ──
         pullSync: async () => {
           try {
@@ -488,7 +615,7 @@ const useStore = create(
             if (res.ok) {
               const { data } = await res.json();
               if (data) {
-                log('info', 'sync pull ok', { addons: data.addons?.length, watchlist: data.watchlist?.length });
+                log('info', 'sync pull ok', { addons: data.addons?.length, watchlist: data.watchlist?.length, profiles: data.profiles?.length });
                 // Keep existing manifests for addons that match, fetch missing ones
                 const currentAddons = get().addons;
                 const newAddons = await Promise.all((data.addons || []).map(async (cloudAddon) => {
@@ -500,13 +627,29 @@ const useStore = create(
                   }
                   try {
                     const { fetchManifest } = await import('../lib/addons');
-                    const manifest = await fetchManifest(addonUrl);
+                    const proxy = get().settings?.effectiveCorsProxy || null;
+                    const manifest = await fetchManifest(addonUrl, proxy);
                     return { url: addonUrl, transportUrl: addonUrl, enabled: cloudAddon.enabled, manifest };
                   } catch (e) {
                     log('warn', `manifest fetch failed: ${addonUrl}`, e.message);
                     return { url: addonUrl, transportUrl: addonUrl, enabled: cloudAddon.enabled, manifest: null };
                   }
                 })).then(arr => arr.filter(Boolean));
+
+                // Merge profiles: prefer server profiles if they exist and are non-empty
+                const serverProfiles = data.profiles || [];
+                const serverActiveProfileId = data.activeProfileId;
+                let profiles = state.profiles;
+                let activeProfile = state.activeProfile;
+
+                if (serverProfiles.length > 0) {
+                  profiles = serverProfiles.map(p => ({ ...p, id: String(p.id) }));
+                  if (serverActiveProfileId) {
+                    activeProfile = profiles.find(p => String(p.id) === String(serverActiveProfileId)) || profiles[0] || null;
+                  } else if (!profiles.find(p => String(p.id) === String(activeProfile?.id))) {
+                    activeProfile = profiles[0] || null;
+                  }
+                }
 
                 set((s) => ({
                   addons: newAddons.length > 0
@@ -518,6 +661,8 @@ const useStore = create(
                   iptvProviders: data.iptvProviders?.length > 0 ? data.iptvProviders : s.iptvProviders,
                   watchlist: data.watchlist?.length > 0 ? data.watchlist : s.watchlist,
                   continueWatching: data.continueWatching?.length > 0 ? data.continueWatching : s.continueWatching,
+                  profiles,
+                  activeProfile,
                 }));
               }
             } else {

@@ -40,6 +40,7 @@ export async function onRequestGet(context) {
         isBeta: !!u.isBeta, isUltra: !!u.isUltra, banned: !!u.banned,
         billingPrice: u.billingPrice || null,
         created: u.created,
+        devices: (u.devices || []).map(d => ({ id: d.id, name: d.name, userAgent: d.userAgent, created: d.created, lastSeen: d.lastSeen })),
       })),
     });
   } catch (e) {
@@ -56,7 +57,7 @@ export async function onRequestPost(context) {
   let body;
   try { body = await request.json(); } catch { return json({ error: 'Invalid JSON' }, 400); }
 
-  const { userId, tier, email, newPassword, isBeta, isUltra, banned, billingPrice, sendPasswordEmail } = body;
+  const { userId, tier, email, newPassword, isBeta, isUltra, banned, billingPrice, sendPasswordEmail, clearDevices, removeDeviceId } = body;
   if (!userId) return json({ error: 'userId required' }, 400);
 
   const raw = await env.SYNC_KV.get(`user:${userId}`);
@@ -70,6 +71,8 @@ export async function onRequestPost(context) {
   if (isUltra !== undefined) user.isUltra = isUltra;
   if (banned !== undefined) user.banned = banned;
   if (billingPrice !== undefined) user.billingPrice = billingPrice || null;
+  if (clearDevices) user.devices = [];
+  if (removeDeviceId) user.devices = (user.devices || []).filter(d => d.id !== removeDeviceId);
 
   // Email change: update both user:{id} and user:{email} KV keys
   if (email && email !== oldEmail) {

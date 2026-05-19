@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useStore } from '../lib/store';
+import { RECOMMENDED_ADDONS } from '../lib/addons';
 
 import './AddonsPage.css';
 
@@ -11,6 +12,7 @@ function tierAtLeast(userTier, required) {
 
 export default function AddonsPage() {
   const addons        = useStore(s => s.addons);
+  const assignedAddons = useStore(s => s.auth.assignedAddons || []);
   const addAddon      = useStore(s => s.addAddon);
   const removeAddon   = useStore(s => s.removeAddon);
   const addToast      = useStore(s => s.addToast);
@@ -22,8 +24,8 @@ export default function AddonsPage() {
   const [loading, setLoading] = useState(false);
   const [section, setSection] = useState('all');
 
-  const recommendedCatalog = serverRecommended;
-  const ultraCatalog = serverUltra;
+  const recommendedCatalog = serverRecommended?.length > 0 ? serverRecommended : RECOMMENDED_ADDONS;
+  const ultraCatalog = serverUltra || [];
   const isUltra = tierAtLeast(tier, 'ultra');
 
   const isInstalled = (tUrl) => addons.some(a => a.transportUrl === tUrl);
@@ -47,14 +49,15 @@ export default function AddonsPage() {
     addToast(`Removed: ${addon.manifest?.name || addon.name}`, 'info');
   };
 
-  // Categorise the active addon list
-  const forcedAddons = addons.filter(a => a.flags?.forced || a.flags?.official);
+  // Fleet = server-assigned forced addons (from auth.assignedAddons, set on login)
+  const forcedAddons = assignedAddons;
+  const forcedUrls = new Set(forcedAddons.map(a => a.transportUrl));
   const recommendedInstalled = addons.filter(a =>
-    !a.flags?.forced && !a.flags?.official &&
+    !forcedUrls.has(a.transportUrl) &&
     recommendedCatalog.some(r => r.transportUrl === a.transportUrl)
   );
   const userAddons = addons.filter(a =>
-    !a.flags?.forced && !a.flags?.official &&
+    !forcedUrls.has(a.transportUrl) &&
     !recommendedCatalog.some(r => r.transportUrl === a.transportUrl) &&
     !ultraCatalog.some(u => u.transportUrl === a.transportUrl)
   );

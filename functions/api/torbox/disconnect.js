@@ -1,5 +1,6 @@
-// POST /api/torbox/disconnect — Remove TorBox API key from KV
+// POST /api/torbox/disconnect — Remove TorBox API key from KV and aiostreams
 import { json, preflight, validateSession } from '../_shared.js';
+import { removeUserDebridKey } from '../aiostreams/_userdata.js';
 
 export function onRequestOptions() { return preflight(); }
 
@@ -9,5 +10,7 @@ export async function onRequestPost(context) {
   if (!session) return json({ error: 'Unauthorized' }, 401);
 
   await env.SYNC_KV.delete(`service:torbox:${session.userId}`);
+  await removeUserDebridKey(env, session.userId, 'torbox');
+
   return json({ success: true });
 }

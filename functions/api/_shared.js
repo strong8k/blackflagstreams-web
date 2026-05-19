@@ -27,9 +27,8 @@ export const TIER_LIMITS = {
 
 export function genId(prefix = '', len = 16) {
   const c = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
-  let id = prefix;
-  for (let i = 0; i < len; i++) id += c[Math.floor(Math.random() * c.length)];
-  return id;
+  const bytes = crypto.getRandomValues(new Uint8Array(len));
+  return prefix + Array.from(bytes, b => c[b % c.length]).join('');
 }
 
 export async function hashPassword(password, salt) {
@@ -39,11 +38,27 @@ export async function hashPassword(password, salt) {
 }
 
 export async function validateSession(env, authHeader) {
-  if (!authHeader?.startsWith('Bearer ')) return null;
+  if (!authHeader?.startsWith('Bearer ')) {
+    console.log('[BFS:Session] DIAG — no/invalid auth header');
+    return null;
+  }
   const token = authHeader.slice(7);
-  const sessionRaw = await env.SYNC_KV.get(`session:${token}`);
+  let sessionRaw;
+  try {
+    sessionRaw = await env.SYNC_KV.get(`session:${token}`);
+    console.log('[BFS:Session] DIAG — KV lookup for session:', token.slice(0, 8) + '...',
+      'found:', !!sessionRaw, 'SYNC_KV binding exists:', !!env?.SYNC_KV);
+  } catch (e) {
+    console.error('[BFS:Session] DIAG — KV lookup THREW:', e.message, 'SYNC_KV exists:', !!env?.SYNC_KV);
+    return null;
+  }
   if (!sessionRaw) return null;
-  return JSON.parse(sessionRaw); // { userId, created }
+  try {
+    return JSON.parse(sessionRaw); // { userId, created }
+  } catch (e) {
+    console.error('[BFS:Session] DIAG — JSON parse failed for session token:', token.slice(0, 8) + '...');
+    return null;
+  }
 }
 
 export async function validateAdminSession(env, request) {

@@ -2,13 +2,12 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useStore } from '../lib/store';
 import {
   getTraktAuthUrl, getTraktStatus, disconnectTrakt, syncTraktHistory as syncTraktApi,
-  connectStremio, disconnectStremio,
+  getStremioAuthCode, pollStremioAuth, disconnectStremio, importStremioLibrary,
   connectTorBox, disconnectTorBox,
   connectRD, disconnectRD,
   getADAuthCode, pollADAuth, disconnectAD,
   connectRPDB, disconnectRPDB,
 } from '../lib/services';
-import { stremioGetLibrary, processStremioLibrary } from '../lib/stremio';
 import './ServiceCard.css';
 
 const SERVICE_META = {
@@ -49,14 +48,16 @@ export default function ServiceCard({ serviceKey }) {
   const connectService = useStore(s => s.connectService);
   const disconnectService = useStore(s => s.disconnectService);
   const bulkImport = useStore(s => s.bulkImport);
+  const mergeStremioLibrary = useStore(s => s.mergeStremioLibrary);
 
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [authCode, setAuthCode] = useState(null);
   const [authLink, setAuthLink] = useState(null);
-  const [stremioEmail, setStremioEmail] = useState('');
-  const [stremioPass, setStremioPass] = useState('');
+  const [stremioCode, setStremioCode] = useState(null);
+  const [stremioLink, setStremioLink] = useState(null);
   const pollRef = useRef(null);
 
   useEffect(() => {
@@ -126,40 +127,99 @@ export default function ServiceCard({ serviceKey }) {
     setServiceStatus('trakt', { autoSync: next });
   }, [services.trakt, setServiceStatus]);
 
-  // ── Stremio ──
-  const handleConnectStremio = useCallback(async () => {
-    if (!stremioEmail.trim() || !stremioPass.trim()) return;
-    setBusy(true);
+  const handleTestTrakt = useCallback(async () => {
+    setTesting(true);
     try {
-      const info = await connectStremio(stremioEmail.trim(), stremioPass.trim());
-      connectService('stremio', { email: info.email });
-      addToast(`Connected to Stremio as ${info.email}`, 'success');
-      setStremioEmail('');
-      setStremioPass('');
+      const status = await getTraktStatus();
+      if (status.connected && status.username) {
+        addToast(`✅ Connected as @${status.username}`, 'success');
+      } else if (status.connected) {
+        addToast('✅ Connected to Trakt', 'success');
+      } else {
+        addToast('❌ Connection failed — token may be expired', 'error');
+      }
     } catch (e) {
-      addToast(`Stremio login failed: ${e.message}`, 'error');
+      addToast('❌ Connection failed — token may be expired', 'error');
     }
-    setBusy(false);
-  }, [stremioEmail, stremioPass, addToast, connectService]);
+    setTesting(false);
+  }, [addToast]);
+
+  // ── Stremio (code-based device linking) ──
+  const handleConnectStremio = useCallback(async () => {
+    setConnecting(true);
+    try {
+      const info = await getStremioAuthCode();
+      setStremioCode(info.code);
+      setStremioLink(info.user_url);
+      window.open(info.user_url, 'stremio-auth', 'noopener');
+      pollRef.current = setInterval(async () => {
+        try {
+          const result = await pollStremioAuth(info.code);
+          if (result.done) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+            const { getStremioStatus } = await import('../lib/services');
+            const status = await getStremioStatus();
+            if (status.connected) {
+              connectService('stremio', { email: status.email || status.username || 'Stremio User' });
+            } else {
+              connectService('stremio', { username: 'Stremio User' });
+            }
+            addToast('Connected to Stremio!', 'success');
+            setConnecting(false);
+            setStremioCode(null);
+            setStremioLink(null);
+          }
+        } catch {}
+      }, 3000);
+    } catch (e) {
+      addToast(`Stremio auth failed: ${e.message}`, 'error');
+      setConnecting(false);
+    }
+  }, [addToast, connectService]);
 
   const handleImportStremio = useCallback(async () => {
     setBusy(true);
     try {
-      const { getStremioStatus } = await import('../lib/services');
-      const data = await getStremioStatus();
-      if (!data._authKey) throw new Error('Stremio auth key not available — try reconnecting');
       addToast('Fetching your Stremio library…', 'info');
-      const library = await stremioGetLibrary(data._authKey);
-      addToast(`Processing ${library.length} items…`, 'info');
-      const processed = await processStremioLibrary(library);
-      await bulkImport(processed);
-      addToast(`Imported ${processed.watchlist.length} watchlist & ${processed.history.length} history items.`, 'success');
+      const data = await importStremioLibrary();
+      if (!data.success) throw new Error(data.error || 'Import failed');
+      const counts = await mergeStremioLibrary(data);
+      const parts = [];
+      if (counts.movies > 0) parts.push(`${counts.movies} movies`);
+      if (counts.series > 0) parts.push(`${counts.series} series`);
+      if (counts.episodes > 0) parts.push(`${counts.episodes} episodes`);
+      const summary = parts.length > 0 ? `Imported ${parts.join(', ')}` : 'No new items to import';
+      addToast(`${summary} from ${data.rawCount} Stremio entries.`, parts.length > 0 ? 'success' : 'info');
       setServiceStatus('stremio', { lastImport: Date.now() });
     } catch (e) {
-      addToast(`Import failed: ${e.message}. If 0 items, the IMDB→TMDB matching may need manual review.`, 'error');
+      addToast(`Stremio import failed: ${e.message}`, 'error');
     }
     setBusy(false);
-  }, [addToast, bulkImport, setServiceStatus]);
+  }, [addToast, mergeStremioLibrary, setServiceStatus]);
+
+  const handleDebugStremio = useCallback(async () => {
+    setBusy(true);
+    try {
+      addToast('Fetching raw Stremio data…', 'info');
+      const data = await importStremioLibrary(true);
+      if (data.error) {
+        addToast(`Debug error: ${data.error}`, 'error');
+        return;
+      }
+      const firstItem = data.raw?.[0];
+      const preview = firstItem
+        ? JSON.stringify(firstItem).slice(0, 150)
+        : 'no raw items';
+      addToast(
+        `Raw: ${data.rawCount}. Resolved: ${data.resolvedCount}. First item: ${preview}`,
+        data.resolvedCount > 0 ? 'success' : 'warning'
+      );
+    } catch (e) {
+      addToast(`Debug failed: ${e.message}`, 'error');
+    }
+    setBusy(false);
+  }, [addToast]);
 
   const handleDisconnectStremio = useCallback(async () => {
     setBusy(true);
@@ -369,30 +429,26 @@ export default function ServiceCard({ serviceKey }) {
         </div>
       )}
 
-      {/* Stremio email/password */}
+      {/* Stremio connecting state */}
+      {connecting && serviceKey === 'stremio' && stremioCode && (
+        <>
+          <div className="service-card-code-label">Visit strem.io/link and enter this code:</div>
+          <div className="service-card-code">{stremioCode}</div>
+          {stremioLink && (
+            <a href={stremioLink} target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm" style={{ width: '100%', textAlign: 'center' }}>
+              Open strem.io/link →
+            </a>
+          )}
+          <div className="spinner" style={{ alignSelf: 'center' }} />
+          <div style={{ marginTop: '0.75rem', fontSize: '0.78rem', color: '#fbbf24' }}>
+            ⚠ Waiting for you to enter the code on Stremio's website and authorize the connection.
+          </div>
+        </>
+      )}
+
+      {/* Stremio connect button (not connected, not connecting) */}
       {!connected && !connecting && serviceKey === 'stremio' && (
-        <div className="service-card-input" style={{ flexDirection: 'column', gap: '0.4rem' }}>
-          <input
-            type="email"
-            placeholder="Stremio email"
-            value={stremioEmail}
-            onChange={e => setStremioEmail(e.target.value)}
-          />
-          <input
-            type="password"
-            placeholder="Stremio password"
-            value={stremioPass}
-            onChange={e => setStremioPass(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleConnectStremio()}
-          />
-          <button
-            className="btn btn-primary btn-sm"
-            onClick={handleConnectStremio}
-            disabled={busy || !stremioEmail.trim() || !stremioPass.trim()}
-          >
-            {busy ? '...' : 'Connect'}
-          </button>
-        </div>
+        <button className="btn btn-primary btn-sm" onClick={handleConnectStremio} disabled={busy}>Connect</button>
       )}
 
       {/* Actions */}
@@ -407,6 +463,7 @@ export default function ServiceCard({ serviceKey }) {
         {connected && serviceKey === 'trakt' && (
           <>
             <button className="btn btn-secondary btn-sm" onClick={handleSyncTrakt} disabled={busy}>Sync Now</button>
+            <button className="btn btn-secondary btn-sm" onClick={handleTestTrakt} disabled={testing}>{testing ? '...' : 'Test Connection'}</button>
             <button className="btn btn-secondary btn-sm" onClick={handleDisconnectTrakt} disabled={busy} style={{ color: '#f87171' }}>Disconnect</button>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer', fontSize: '0.72rem', userSelect: 'none', color: 'var(--text-muted)', width: '100%' }}>
               <input type="checkbox" checked={services.trakt?.autoSync ?? true} onChange={handleToggleTraktAutoSync} />
@@ -418,6 +475,7 @@ export default function ServiceCard({ serviceKey }) {
         {connected && serviceKey === 'stremio' && (
           <>
             <button className="btn btn-secondary btn-sm" onClick={handleImportStremio} disabled={busy}>Import Library</button>
+            <button className="btn btn-secondary btn-sm" onClick={handleDebugStremio} disabled={busy} title="Fetch raw library data and log to console">Debug</button>
             <button className="btn btn-secondary btn-sm" onClick={handleDisconnectStremio} disabled={busy} style={{ color: '#f87171' }}>Disconnect</button>
           </>
         )}

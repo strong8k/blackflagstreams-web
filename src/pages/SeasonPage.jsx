@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { getSeasonDetails, img } from '../lib/tmdb';
 import { useStore } from '../lib/store';
+import { getApiBaseUrl } from '../lib/auth';
 import './SeasonPage.css';
 
 export default function SeasonPage() {
@@ -11,8 +12,19 @@ export default function SeasonPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [watchedEpisodes, setWatchedEpisodes] = useState({}); // { "1": true, "3": true }
 
   const getProgress = useStore(s => s.getProgress);
+  const token = useStore(s => s.auth.token);
+  const stremioConnected = useStore(s => s.services?.stremio?.connected);
+
+  // Load watched state from sessionStorage for Stremio-synced episodes
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(`bfs_watched_tv_${id}_s${season}`);
+      if (raw) setWatchedEpisodes(JSON.parse(raw));
+    } catch {}
+  }, [id, season]);
 
   useEffect(() => {
     let cancelled = false;
@@ -82,6 +94,15 @@ export default function SeasonPage() {
                     <img src={img.backdrop(ep.still_path, 'w300')} alt={ep.name} className="episode-thumb" />
                   ) : (
                     <div className="episode-thumb-placeholder">No Preview</div>
+                  )}
+                  {watchedEpisodes[String(ep.episode_number)] && (
+                    <div className="episode-watched-badge" style={{
+                      position: 'absolute', top: '6px', right: '6px',
+                      background: 'rgba(16, 185, 129, 0.9)', borderRadius: '50%',
+                      width: '26px', height: '26px', display: 'flex',
+                      alignItems: 'center', justifyContent: 'center',
+                      fontSize: '14px', boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+                    }}>✓</div>
                   )}
                   <div className="episode-play-overlay">
                     <span className="play-icon">▶</span>

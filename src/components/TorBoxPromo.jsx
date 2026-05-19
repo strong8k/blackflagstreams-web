@@ -97,7 +97,10 @@ async function testTorBoxKey(apiKey, corsProxy) {
   }
 }
 
-export default function TorBoxPromo() {
+export default function TorBoxPromo({ forceShow } = {}) {
+  const torboxConnected = useStore(s => s.services?.torbox?.connected);
+  if (torboxConnected && !forceShow) return null;
+
   const [apiKey, setApiKey] = useState(localStorage.getItem('bfs_torbox_key') || '');
   const [saved, setSaved] = useState(!!localStorage.getItem('bfs_torbox_key'));
   const [testing, setTesting] = useState(false);

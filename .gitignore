@@ -25,3 +25,27 @@ dist-ssr
 
 # CodeTree cache
 .codetree/
+.aider*
+
+# AI / Agent / IDE settings
+.claude/
+.cursor/
+.clinerules
+CLAUDE.md
+hermes*
+.mcp.json
+openrouter/
+model
+dev-log.md
+
+# Cloudflare build cache
+.wrangler/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Build output
+dist/
+dist-ssr/

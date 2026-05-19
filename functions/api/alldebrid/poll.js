@@ -1,5 +1,6 @@
 // POST /api/alldebrid/poll — Poll for All-Debrid PIN authorization
 import { json, preflight, validateSession } from '../_shared.js';
+import { setUserDebridKey } from '../aiostreams/_userdata.js';
 
 export function onRequestOptions() { return preflight(); }
 
@@ -35,6 +36,13 @@ export async function onRequestPost(context) {
       created: Date.now(),
     }));
     await env.SYNC_KV.delete(`service:ad_pending:${session.userId}`);
+    // Sync AIOStreams config with new key (best-effort — key is already saved in KV)
+    try {
+      await setUserDebridKey(env, session.userId, 'alldebrid', apikey);
+    } catch (e) {
+      console.error('[BFS:AIO] alldebrid syncUser error:', e.message);
+    }
+
     return json({ done: true });
   } catch (e) {
     return json({ error: `AD poll error: ${e.message}` }, 502);

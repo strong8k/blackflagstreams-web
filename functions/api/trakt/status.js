@@ -19,7 +19,7 @@ export async function onRequestGet(context) {
     try {
       const clientId = env.TRAKT_CLIENT_ID;
       const clientSecret = env.TRAKT_CLIENT_SECRET;
-      const redirectUri = env.TRAKT_REDIRECT_URI || 'https://www.blackflagstreams.link/api/trakt/callback';
+      const redirectUri = env.TRAKT_REDIRECT_URI || `${new URL(request.url).origin}/api/trakt/callback`;
 
       const refreshRes = await fetch('https://api.trakt.tv/oauth/token', {
         method: 'POST',

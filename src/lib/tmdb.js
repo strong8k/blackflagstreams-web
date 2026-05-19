@@ -11,7 +11,7 @@ const CACHE_TTL = {
   lists: 3600 * 1000,           // 1h — popular/trending lists
   search: 600 * 1000,           // 10min — search results
   images: 7 * 24 * 3600 * 1000, // 1 week — image URLs (just metadata, not binary)
-  streams: 2 * 3600 * 1000,     // 2h — stream results
+  streams: 5 * 60 * 1000,        // 5min — stream results (short: debrid cache changes frequently)
 };
 
 // ── IDB cache helpers ──
@@ -39,7 +39,6 @@ async function cacheGet(storeName, key) {
         const entry = req.result;
         if (!entry) return resolve(null);
         if (Date.now() - entry.ts > entry.ttl) {
-          // Expired — delete async, don't await
           const delTx = db.transaction(storeName, 'readwrite');
           delTx.objectStore(storeName).delete(key);
           return resolve(null);
@@ -79,9 +78,6 @@ export async function clearStreamCache() {
 }
 
 export async function clearImageCache() {
-  // Image caching is handled by the browser's HTTP cache.
-  // This clears our TMDB metadata cache, forcing fresh API calls which
-  // regenerate image URLs — the browser may still use cached images.
   try {
     const db = await getIDB();
     const tx = db.transaction('tmdb', 'readwrite');
@@ -200,6 +196,24 @@ export async function getGenres(type) {
     genreCache = { movie: movie.genres || [], tv: tv.genres || [] };
   }
   return genreCache[type] || [];
+}
+
+// ── Images (for logos) ──
+let imagesCache = {};
+export async function getTmdbImages(type, tmdbId) {
+  const cacheKey = `${type}:${tmdbId}`;
+  if (imagesCache[cacheKey]) return imagesCache[cacheKey];
+  try {
+    const data = await tmdb(`/${type}/${tmdbId}/images`, {
+      include_image_language: 'en,null',
+    }, 7 * 24 * 3600 * 1000);
+    // Pick the first English logo with text, fallback to any logo
+    const logos = data.logos || [];
+    const logo = logos.find(l => l.iso_639_1 === 'en') || logos[0];
+    const result = { logoPath: logo?.file_path ? logo.file_path : null };
+    imagesCache[cacheKey] = result;
+    return result;
+  } catch { return { logoPath: null }; }
 }
 
 // ── Stream caching ──

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import FilterDropdown from './FilterDropdown';
 import { getGenres } from '../lib/tmdb';
 import { useStore } from '../lib/store';
