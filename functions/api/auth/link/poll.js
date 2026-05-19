@@ -10,7 +10,8 @@ export async function onRequestGet(context) {
   const code = new URL(request.url).searchParams.get('code');
   if (!code) return json({ error: 'Missing code' }, 400);
 
-  const raw = await env.SYNC_KV.get(`link_pending:${code}`);
+  let raw = await env.SYNC_KV.get(`link_pending:${code}`);
+  if (!raw) raw = await env.SYNC_KV.get(`link:${code}`);
   if (!raw) return json({ error: 'Code expired or invalid' }, 404);
 
   const data = JSON.parse(raw);
@@ -18,6 +19,7 @@ export async function onRequestGet(context) {
   if (data.status === 'approved') {
     // Clean up immediately after TV reads it
     await env.SYNC_KV.delete(`link_pending:${code}`);
+    await env.SYNC_KV.delete(`link:${code}`);
     return json({ done: true, token: data.token, user: data.user });
   }
 

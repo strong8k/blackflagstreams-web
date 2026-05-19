@@ -479,6 +479,8 @@ const useStore = create(
                 iptvProviders: state.iptvProviders,
                 watchlist: state.watchlist,
                 continueWatching: state.continueWatching,
+                history: state.history,
+                preferences: state.settings,
                 profiles: state.profiles,
                 activeProfileId: state.activeProfile?.id != null ? String(state.activeProfile.id) : null,
               }),
@@ -661,6 +663,8 @@ const useStore = create(
                   iptvProviders: data.iptvProviders?.length > 0 ? data.iptvProviders : s.iptvProviders,
                   watchlist: data.watchlist?.length > 0 ? data.watchlist : s.watchlist,
                   continueWatching: data.continueWatching?.length > 0 ? data.continueWatching : s.continueWatching,
+                  history: data.history?.length > 0 ? data.history : s.history,
+                  settings: data.preferences ? { ...s.settings, ...data.preferences } : s.settings,
                   profiles,
                   activeProfile,
                 }));

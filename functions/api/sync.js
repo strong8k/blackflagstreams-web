@@ -25,7 +25,7 @@ export async function onRequestGet(context) {
   if (!session) return json({ error: 'Not authenticated' }, 401);
 
   const syncData = await env.SYNC_KV.get(`sync:${session.userId}`);
-  if (!syncData) return json({ success: true, data: { addons: [], watchlist: [], continueWatching: [], iptvProviders: [], preferences: {}, profiles: [], activeProfileId: null } });
+  if (!syncData) return json({ success: true, data: { addons: [], watchlist: [], continueWatching: [], history: [], iptvProviders: [], preferences: {}, profiles: [], activeProfileId: null } });
 
   const parsed = JSON.parse(syncData);
   if (parsed.addons) {
@@ -60,6 +60,7 @@ export async function onRequestPost(context) {
     addons: body.addons || [],
     watchlist: body.watchlist || [],
     continueWatching: body.continueWatching || [],
+    history: body.history || [],
     iptvProviders: body.iptvProviders || [],
     preferences: body.preferences || {},
     profiles: body.profiles || [],
